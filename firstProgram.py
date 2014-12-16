@@ -8,3 +8,5 @@ print("hello world")
 
 # linea modificada en la raspberry via VNC
 
+# nueva linea editada con notepad++ desde mi pc
+
