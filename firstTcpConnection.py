@@ -5,10 +5,10 @@
 import socket
 
 # Initializing elements
-TCP_IP='192.168.0.107'
+TCP_IP='192.168.0.39'
 TCP_PORT=2189
 BUFFER_SIZE=1024
-MESSAGE = 'briver\n'
+MESSAGE = 'attrib ants=1\n'
 
 # con estos datos si que se envia y recibe
 #TCP_IP='www.google.com'
