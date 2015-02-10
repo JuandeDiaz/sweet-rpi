@@ -13,9 +13,9 @@ import socket
 
 class myTkinterApp():
 	
-	TCP_IP_RFID_READER='192.168.0.20'
+	TCP_IP_RFID_READER='192.168.0.68'
 	TCP_PORT_RFID_READER=2189
-	BUFFER_SIZE_RFID_READER=512
+	BUFFER_SIZE_RFID_READER=1024
 	
 	ATTRIB_ANTS='1,2,3,4'		# 'ATTRIB ANTS=1,2,3,4\n' defines de sequence of antennas when reading
 	ATTRIB_TAGTYPE='EPCC1G2'	# 'ATTRIB TAGTYPE=EPCC1G2\n' defines the tag to be read
@@ -74,22 +74,15 @@ class myTkinterApp():
 		lbl3=tk.Label(indicatorsFrame, text="GPRS connection:").grid(row=2, column=0, padx=10, pady=2, sticky=tk.W)
 		self.circleCanvasGPRS=tk.Canvas(indicatorsFrame, width=20, height=20)
 		self.circleCanvasGPRS.grid(row=2, column=1, padx=20, pady=2)
-
-		#controlFrame
-		controlsFrame=tk.Frame(leftFrame)
-		controlsFrame.grid(row=1, column=0) 
-			
-		lbl4=tk.Label(controlsFrame, text="--------------").grid(row=0, column=0, padx=10, pady=20)		
-				
-		cfgButton=tk.Button(controlsFrame, text='Configure', width=10, command=self.createConfigureWindow)
-		cfgButton.grid(row=0, column=0, padx=10, pady=2)
 		
-		exitBtn=tk.Button(controlsFrame, text='Exit', width=10, command=self.terminate)
-		exitBtn.grid(row=0, column=1, padx=10, pady=2)
-		
+		#separator
+		sep1=tk.Frame(leftFrame, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
+		sep1.grid(row=1, sticky=tk.W+tk.E, padx=10, pady=4)
+						
 		#testFrame
 		testFrame=tk.Frame(leftFrame)
 		testFrame.grid(row=2, column=0) 
+		
 		lbl5=tk.Label(testFrame, text="Testing RFID reader").grid(row=0, column=0, padx=10, pady=2, sticky=tk.W)
 		
 		lbl6=tk.Label(testFrame, text="Enter BRI Command:").grid(row=1, column=0, padx=10, pady=2, sticky=tk.W)				
@@ -102,6 +95,19 @@ class myTkinterApp():
 		btnRead=tk.Button(testFrame, text='Read', command=self.sendReadCommand)
 		btnRead.grid(row=2, column=2, padx=10, pady=2)	
 
+		#separator
+		sep2=tk.Frame(leftFrame, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
+		sep2.grid(row=3, sticky=tk.W+tk.E, padx=10, pady=4)
+		
+		#controlFrame
+		controlsFrame=tk.Frame(leftFrame)
+		controlsFrame.grid(row=4, column=0) 
+				
+		cfgButton=tk.Button(controlsFrame, text='Configure', width=10, command=self.createConfigureWindow)
+		cfgButton.grid(row=1, column=0, padx=10, pady=2)
+		
+		exitBtn=tk.Button(controlsFrame, text='Exit', width=10, command=self.terminate)
+		exitBtn.grid(row=1, column=1, padx=10, pady=2)
 		
 		# Right Frame and its contents
 		rightFrame=tk.Frame(self.root, width=200, height=600)
@@ -405,6 +411,7 @@ class myTkinterApp():
 		exitTopWindow=tk.Button(topWindow, text='Exit', command=topWindow.destroy)
 		exitTopWindow.grid(row=23, column=4, padx=10, pady=4, sticky=tk.W+tk.E)		
 	
+	
 	def sendTestCommand(self):
 		
 		command= self.eTestRfid.get()+'\n'
@@ -433,8 +440,7 @@ class myTkinterApp():
 			#self.textLog.insert(tk.END,'socket connected\n')   		
 			s.send(command.encode('utf-8'))
 			#self.textLog.insert(tk.END,'message sent succesfuly\n')  
-			#responseAsByte=s.recv(self.BUFFER_SIZE_RFID_READER)
-			responseAsByte=s.recv(512)
+			responseAsByte=s.recv(self.BUFFER_SIZE_RFID_READER)
 			#self.textLog.insert(tk.END,'message received succesffuly\n') 
 			s.close()  
 			responseAsString=responseAsByte.decode('utf-8')
@@ -451,18 +457,130 @@ class myTkinterApp():
 		
 		config=ET.Element("config")
 		
-		TCP_IP_RFID_READER=ET.SubElement(config, "TCP_IP_RFID_READER")	
-		TCP_IP_RFID_READER.text=(self.e1.get())
+		TcpReaderConfig=ET.SubElement(config, "TcpReaderConfig")	
+		
+		ET_TCP_IP_RFID_READER=ET.SubElement(TcpReaderConfig, "TCP_IP_RFID_READER")	
+		ET_TCP_IP_RFID_READER.text=(self.e1.get())
 		self.TCP_IP_RFID_READER=(self.e1.get())
 	
-		TCP_PORT_RFID_READER=ET.SubElement(config, "TCP_PORT_RFID_READER")	
-		TCP_PORT_RFID_READER.text=(self.e2.get())
+		ET_TCP_PORT_RFID_READER=ET.SubElement(TcpReaderConfig, "TCP_PORT_RFID_READER")	
+		ET_TCP_PORT_RFID_READER.text=(self.e2.get())
 		self.TCP_PORT_RFID_READER=int((self.e2.get()))
 				
-		BUFFER_SIZE_RFID_READER=ET.SubElement(config, "BUFFER_SIZE_RFID_READER")	
-		BUFFER_SIZE_RFID_READER.text=(self.e3.get())	
-		self.BUFFER_SIZE_RFID_READER=int((self.e3.get()))
+		ET_BUFFER_SIZE_RFID_READER=ET.SubElement(TcpReaderConfig, "BUFFER_SIZE_RFID_READER")	
+		ET_BUFFER_SIZE_RFID_READER.text=(self.e3.get())	
+		self.BUFFER_SIZE_RFID_READER=int((self.e3.get()))		
+		
+		RfidReaderConfig=ET.SubElement(config, "RfidReaderConfig")	
+		
+		ET_ATTRIB_ANTS=ET.SubElement(RfidReaderConfig, "ATTRIB_ANTS")	
+		ET_ATTRIB_ANTS.text=(self.e4.get())
+		self.ATTRIB_ANTS=(self.e4.get())
+	
+		ET_ATTRIB_TAGTYPE=ET.SubElement(RfidReaderConfig, "ATTRIB_TAGTYPE")	
+		ET_ATTRIB_TAGTYPE.text=(self.e5.get())
+		self.ATTRIB_TAGTYPE=(self.e5.get())
 				
+		ET_ATTRIB_FIELDSTRENGTH=ET.SubElement(RfidReaderConfig, "ATTRIB_FIELDSTRENGTH")	
+		ET_ATTRIB_FIELDSTRENGTH.text=(self.e6.get())	
+		self.ATTRIB_FIELDSTRENGTH=(self.e6.get())		
+		
+		ET_ATTRIB_RDTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_RDTRIES")	
+		ET_ATTRIB_RDTRIES.text=(self.e7.get())
+		self.ATTRIB_RDTRIES=(self.e7.get())
+	
+		ET_ATTRIB_RPTTIMEOUT=ET.SubElement(RfidReaderConfig, "ATTRIB_RPTTIMEOUT")	
+		ET_ATTRIB_RPTTIMEOUT.text=(self.e8.get())
+		self.ATTRIB_RPTTIMEOUT=(self.e8.get())
+				
+		ET_ATTRIB_IDTIMEOUT=ET.SubElement(RfidReaderConfig, "ATTRIB_IDTIMEOUT")	
+		ET_ATTRIB_IDTIMEOUT.text=(self.e9.get())	
+		self.ATTRIB_IDTIMEOUT=(self.e9.get())	
+
+		ET_ATTRIB_ANTTIMEOUT=ET.SubElement(RfidReaderConfig, "ATTRIB_ANTTIMEOUT")	
+		ET_ATTRIB_ANTTIMEOUT.text=(self.e10.get())	
+		self.ATTRIB_ANTTIMEOUT=(self.e10.get())	
+		
+		ET_ATTRIB_IDTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_IDTRIES")	
+		ET_ATTRIB_IDTRIES.text=(self.e11.get())	
+		self.ATTRIB_IDTRIES=(self.e11.get())	
+		
+		ET_ATTRIB_ANTTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_ANTTRIES")	
+		ET_ATTRIB_ANTTRIES.text=(self.e12.get())	
+		self.ATTRIB_ANTTRIES=(self.e12.get())
+		
+		ET_ATTRIB_WRTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_WRTRIES")	
+		ET_ATTRIB_WRTRIES.text=(self.e13.get())	
+		self.ATTRIB_WRTRIES=(self.e13.get())
+		
+		ET_ATTRIB_LOCKTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_LOCKTRIES")	
+		ET_ATTRIB_LOCKTRIES.text=(self.e14.get())	
+		self.ATTRIB_LOCKTRIES=(self.e14.get())
+		
+		ET_ATTRIB_SELTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_SELTRIES")	
+		ET_ATTRIB_SELTRIES.text=(self.e15.get())	
+		self.ATTRIB_SELTRIES=(self.e15.get())
+		
+		ET_ATTRIB_UNSELTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_UNSELTRIES")	
+		ET_ATTRIB_UNSELTRIES.text=(self.e16.get())	
+		self.ATTRIB_UNSELTRIES=(self.e16.get())
+
+		ET_ATTRIB_INITTRIES=ET.SubElement(RfidReaderConfig, "ATTRIB_INITTRIES")	
+		ET_ATTRIB_INITTRIES.text=(self.e17.get())	
+		self.ATTRIB_INITTRIES=(self.e17.get())
+		
+		ET_ATTRIB_INITIALQ=ET.SubElement(RfidReaderConfig, "ATTRIB_INITIALQ")	
+		ET_ATTRIB_INITIALQ.text=(self.e18.get())	
+		self.ATTRIB_INITIALQ=(self.e18.get())
+		
+		ET_ATTRIB_QUERYSEL=ET.SubElement(RfidReaderConfig, "ATTRIB_QUERYSEL")	
+		ET_ATTRIB_QUERYSEL.text=(self.e19.get())	
+		self.ATTRIB_QUERYSEL=(self.e19.get())
+
+		ET_ATTRIB_QUERYTARGET=ET.SubElement(RfidReaderConfig, "ATTRIB_QUERYTARGET")	
+		ET_ATTRIB_QUERYTARGET.text=(self.e20.get())	
+		self.ATTRIB_QUERYTARGET=(self.e20.get())
+		
+		ET_ATTRIB_SESSION=ET.SubElement(RfidReaderConfig, "ATTRIB_SESSION")	
+		ET_ATTRIB_SESSION.text=(self.e21.get())	
+		self.ATTRIB_SESSION=(self.e21.get())
+		
+		ET_ATTRIB_LBTCHANNEL=ET.SubElement(RfidReaderConfig, "ATTRIB_LBTCHANNEL")	
+		ET_ATTRIB_LBTCHANNEL.text=(self.e22.get())	
+		self.ATTRIB_LBTCHANNEL=(self.e22.get())
+
+		ET_ATTRIB_SCHEDULEOPT=ET.SubElement(RfidReaderConfig, "ATTRIB_SCHEDULEOPT")	
+		ET_ATTRIB_SCHEDULEOPT.text=(self.e23.get())	
+		self.ATTRIB_SCHEDULEOPT=(self.e23.get())
+		
+		ET_ATTRIB_FIELDSEP=ET.SubElement(RfidReaderConfig, "ATTRIB_FIELDSEP")	
+		ET_ATTRIB_FIELDSEP.text=(self.e24.get())	
+		self.ATTRIB_FIELDSEP=(self.e24.get())
+		
+		ET_ATTRIB_BROADCASTSYNC=ET.SubElement(RfidReaderConfig, "ATTRIB_BROADCASTSYNC")	
+		ET_ATTRIB_BROADCASTSYNC.text=(self.e25.get())	
+		self.ATTRIB_BROADCASTSYNC=(self.e25.get())
+
+		ET_ATTRIB_UTCTIME=ET.SubElement(RfidReaderConfig, "ATTRIB_UTCTIME")	
+		ET_ATTRIB_UTCTIME.text=(self.e26.get())	
+		self.ATTRIB_UTCTIME=(self.e26.get())
+		
+		ET_ATTRIB_TIMEOUTMODE=ET.SubElement(RfidReaderConfig, "ATTRIB_TIMEOUTMODE")	
+		ET_ATTRIB_TIMEOUTMODE.text=(self.e27.get())	
+		self.ATTRIB_TIMEOUTMODE=(self.e27.get())
+		
+		ET_ATTRIB_NOTAGRPT=ET.SubElement(RfidReaderConfig, "ATTRIB_NOTAGRPT")	
+		ET_ATTRIB_NOTAGRPT.text=(self.e28.get())	
+		self.ATTRIB_NOTAGRPT=(self.e28.get())		
+
+		ET_ATTRIB_IDREPORT=ET.SubElement(RfidReaderConfig, "ATTRIB_IDREPORT")	
+		ET_ATTRIB_IDREPORT.text=(self.e29.get())	
+		self.ATTRIB_IDREPORT=(self.e29.get())
+		
+		ET_ATTRIB_SCHEDOPT=ET.SubElement(RfidReaderConfig, "ATTRIB_SCHEDOPT")	
+		ET_ATTRIB_SCHEDOPT.text=(self.e30.get())	
+		self.ATTRIB_SCHEDOPT=(self.e30.get())
+			
 		tree =ET.ElementTree(config)
 		tree.write("config.xml")
 		
@@ -488,28 +606,166 @@ class myTkinterApp():
 			
 			
 	def loadXmlFile(self):
-		#here we try to connecto to the xml file
+		
+		#here we try to connecto to the xml file		
 		try:
 			tree=ET.parse('config.xml')
 			XMLroot=tree.getroot()
 			self.textLog.insert(tk.END, "Config file found\n")	
 		except:	
 			self.textLog.insert(tk.END, "Config file not found\n")
-				
-		if not XMLroot[0].text:		#empty trings give error, so we identify first if the string is empty
+
+		#TCP Congiguration Info		
+		if not XMLroot[0][0].text:		#empty trings give error, so we identify first if the string is empty
 			self.TCP_IP_RFID_READER=''
 		else:	
-			self.TCP_IP_RFID_READER=XMLroot[0].text	#if it is not empty				
+			self.TCP_IP_RFID_READER=XMLroot[0][0].text	#if it is not empty				
 
-		if not XMLroot[1].text:		#empty trings give error, so we identify first if the string is empty
+		if not XMLroot[0][1].text:		#empty trings give error, so we identify first if the string is empty
 			self.TCP_PORT_RFID_READER=0
 		else:	
-			self.TCP_PORT_RFID_READER=int(XMLroot[1].text)	#if it is not empty		
+			self.TCP_PORT_RFID_READER=int(XMLroot[0][1].text)	#if it is not empty		
 
-		if not XMLroot[2].text:		#empty trings give error, so we identify first if the string is empty
+		if not XMLroot[0][2].text:		#empty trings give error, so we identify first if the string is empty
 			self.BUFFER_SIZE_RFID_READER=0
 		else:	
-			self.BUFFER_SIZE_RFID_READER=int(XMLroot[2].text)	#if it is not empty		
+			self.BUFFER_SIZE_RFID_READER=int(XMLroot[0][2].text)	#if it is not empty		
+
+		#RFID Congiguration Info - BRI Commands
+		if not XMLroot[1][0].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_ANTS=''
+		else:	
+			self.ATTRIB_ANTS=XMLroot[1][0].text	#if it is not empty	
+
+		if not XMLroot[1][1].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_TAGTYPE=''
+		else:	
+			self.ATTRIB_TAGTYPE=XMLroot[1][1].text	#if it is not empty	
+			
+		if not XMLroot[1][2].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_FIELDSTRENGTH=''
+		else:	
+			self.ATTRIB_FIELDSTRENGTH=XMLroot[1][2].text	#if it is not empty	
+
+		if not XMLroot[1][3].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_RDTRIES=''
+		else:	
+			self.ATTRIB_RDTRIES=XMLroot[1][3].text	#if it is not empty	
+
+		if not XMLroot[1][4].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_RPTTIMEOUT=''
+		else:	
+			self.ATTRIB_RPTTIMEOUT=XMLroot[1][4].text	#if it is not empty	
+			
+		if not XMLroot[1][5].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_IDTIMEOUT=''
+		else:	
+			self.ATTRIB_IDTIMEOUT=XMLroot[1][5].text	#if it is not empty	
+
+		if not XMLroot[1][6].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_ANTTIMEOUT=''
+		else:	
+			self.ATTRIB_ANTTIMEOUT=XMLroot[1][6].text	#if it is not empty	
+
+		if not XMLroot[1][7].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_IDTRIES=''
+		else:	
+			self.ATTRIB_IDTRIES=XMLroot[1][7].text	#if it is not empty	
+			
+		if not XMLroot[1][8].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_ANTTRIES=''
+		else:	
+			self.ATTRIB_ANTTRIES=XMLroot[1][8].text	#if it is not empty	
+
+		if not XMLroot[1][9].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_WRTRIES=''
+		else:	
+			self.ATTRIB_WRTRIES=XMLroot[1][9].text	#if it is not empty	
+
+		if not XMLroot[1][10].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_LOCKTRIES=''
+		else:	
+			self.ATTRIB_LOCKTRIES=XMLroot[1][10].text	#if it is not empty	
+			
+		if not XMLroot[1][11].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SELTRIES=''
+		else:	
+			self.ATTRIB_SELTRIES=XMLroot[1][11].text	#if it is not empty	
+
+		if not XMLroot[1][12].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_UNSELTRIES=''
+		else:	
+			self.ATTRIB_UNSELTRIES=XMLroot[1][12].text	#if it is not empty	
+
+		if not XMLroot[1][13].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_INITTRIES=''
+		else:	
+			self.ATTRIB_INITTRIES=XMLroot[1][13].text	#if it is not empty	
+			
+		if not XMLroot[1][14].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_INITIALQ=''
+		else:	
+			self.ATTRIB_INITIALQ=XMLroot[1][14].text	#if it is not empty	
+
+		if not XMLroot[1][15].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_QUERYSEL=''
+		else:	
+			self.ATTRIB_QUERYSEL=XMLroot[1][15].text	#if it is not empty	
+
+		if not XMLroot[1][16].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_QUERYTARGET=''
+		else:	
+			self.ATTRIB_QUERYTARGET=XMLroot[1][16].text	#if it is not empty	
+			
+		if not XMLroot[1][17].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SESSION=''
+		else:	
+			self.ATTRIB_SESSION=XMLroot[1][17].text	#if it is not empty	
+
+		if not XMLroot[1][18].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_LBTCHANNEL=''
+		else:	
+			self.ATTRIB_LBTCHANNEL=XMLroot[1][18].text	#if it is not empty	
+
+		if not XMLroot[1][19].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SCHEDULEOPT=''
+		else:	
+			self.ATTRIB_SCHEDULEOPT=XMLroot[1][19].text	#if it is not empty	
+			
+		if not XMLroot[1][20].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_FIELDSEP=''
+		else:	
+			self.ATTRIB_FIELDSEP=XMLroot[1][20].text	#if it is not empty	
+
+		if not XMLroot[1][21].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_BROADCASTSYNC=''
+		else:	
+			self.ATTRIB_BROADCASTSYNC=XMLroot[1][21].text	#if it is not empty	
+
+		if not XMLroot[1][22].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_UTCTIME=''
+		else:	
+			self.ATTRIB_UTCTIME=XMLroot[1][22].text	#if it is not empty	
+			
+		if not XMLroot[1][23].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_TIMEOUTMODE=''
+		else:	
+			self.ATTRIB_TIMEOUTMODE=XMLroot[1][23].text	#if it is not empty	
+
+		if not XMLroot[1][24].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_NOTAGRPT=''
+		else:	
+			self.ATTRIB_NOTAGRPT=XMLroot[1][24].text	#if it is not empty	
+
+		if not XMLroot[1][25].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_IDREPORT=''
+		else:	
+			self.ATTRIB_IDREPORT=XMLroot[1][25].text	#if it is not empty	
+			
+		if not XMLroot[1][26].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SCHEDOPT=''
+		else:	
+			self.ATTRIB_SCHEDOPT=XMLroot[1][26].text	#if it is not empty	
 		
 		self.textLog.insert(tk.END, "Xml file loaded successfully\n")
 		self.textLog.yview(tk.END)  #to keep the last text always visible
@@ -524,6 +780,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1,2,3,4")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Defines de sequence of antennas when reading")
+		self.e4.focus()
 
 
 	def cfgBtn2_click(self):
@@ -531,13 +788,15 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. EPCC1G2")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Defines the tag to be read")	
-
+		self.e5.focus()
+		
 
 	def cfgBtn3_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 29DB,29DB,29DB,29DB")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define the RF power for each antenna")
+		self.e6.focus()
 
 
 	def cfgBtn4_click(self):
@@ -545,6 +804,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 3")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Number of attempts to read a tag before a response is returned")
+		self.e7.focus()
 
 
 	def cfgBtn5_click(self):
@@ -552,13 +812,15 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 0")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets delay in response")
-
+		self.e8.focus()
+		
 
 	def cfgBtn6_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 4000")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets maximum time attempting to read tags")
+		self.e9.focus()
 
 
 	def cfgBtn7_click(self):
@@ -566,6 +828,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 0")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets maximum time attempting to use antenna when reading tags")
+		self.e10.focus()
 
 
 	def cfgBtn8_click(self):
@@ -573,6 +836,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times an attemp is made to read tags")
+		self.e11.focus()
 
 
 	def cfgBtn9_click(self):
@@ -580,6 +844,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times each antenna is used  for Read/Write")
+		self.e12.focus()
 
 
 	def cfgBtn10_click(self):
@@ -587,6 +852,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 3")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times an attempt is made to Write Data")
+		self.e13.focus()
 
 
 	def cfgBtn11_click(self):
@@ -594,6 +860,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 3")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times the lock algorithm is executed before answering")
+		self.e14.focus()
 
 
 	def cfgBtn12_click(self):
@@ -601,6 +868,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times a group select is attempted")
+		self.e15.focus()
 
 
 	def cfgBtn13_click(self):
@@ -608,6 +876,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times a group unselect is attempted")
+		self.e16.focus()
 
 
 	def cfgBtn14_click(self):
@@ -615,6 +884,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets initialization tries")
+		self.e17.focus()
 
 
 	def cfgBtn15_click(self):
@@ -622,6 +892,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Definite Q parameter value of the query command")
+		self.e18.focus()
 
 
 	def cfgBtn16_click(self):
@@ -629,6 +900,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 4")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define sel field for query commands")
+		self.e19.focus()
 
 		
 	def cfgBtn17_click(self):
@@ -636,6 +908,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. A")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define target field for query commands")
+		self.e20.focus()
 
 
 	def cfgBtn18_click(self):
@@ -643,6 +916,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define session parameter")		
+		self.e21.focus()
 		
 		
 	def cfgBtn19_click(self):
@@ -650,6 +924,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 7")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define channel for Listen-Before-Talk algorithm")
+		self.e22.focus()
 
 
 	def cfgBtn20_click(self):
@@ -657,6 +932,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define how antennas are switched")
+		self.e23.focus()
 		
 		
 	def cfgBtn21_click(self):
@@ -664,6 +940,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. ' '")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define separator in output")
+		self.e24.focus()
 
 
 	def cfgBtn22_click(self):
@@ -671,6 +948,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 0")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Value of UTCTime sent in BroadcastsSync commands")
+		self.e25.focus()
 
 
 	def cfgBtn23_click(self):
@@ -678,6 +956,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. 1094")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define the usage of timeout and tries attributes")
+		self.e26.focus()
 
 
 	def cfgBtn24_click(self):
@@ -685,6 +964,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. OFF")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define separator in output")
+		self.e27.focus()
 
 		
 	def cfgBtn25_click(self):
@@ -692,6 +972,7 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. ON")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Send a message when no tags are found")
+		self.e28.focus()
 
 
 	def cfgBtn26_click(self):
@@ -699,12 +980,15 @@ class myTkinterApp():
 		self.tExample.insert(tk.END, "i.e. ON")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Configure reader to send tag identifiers when a command is executed")
+		self.e29.focus()
+
 
 	def cfgBtn27_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Same as SCHEDULEOPT")
+		self.e30.focus()
 						
 		
 #main loop 

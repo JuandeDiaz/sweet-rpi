@@ -5,7 +5,7 @@
 import socket
 
 # Initializing elements
-TCP_IP='192.168.0.39'
+TCP_IP='192.168.0.68'
 TCP_PORT=2189
 BUFFER_SIZE=1024
 MESSAGE = 'attrib ants=1\n'
