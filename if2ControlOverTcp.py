@@ -6,7 +6,7 @@ import socket
 import time
 
 # Initializing elements
-TCP_IP='192.168.0.20'
+TCP_IP='192.168.0.222'
 TCP_PORT=2189
 BUFFER_SIZE=512
 MESSAGE = 'briver\n'
@@ -81,7 +81,7 @@ def openingReader():
 print("Reader initiated. Entering read mode...".encode('utf-8').decode('utf-8'))  
 try:
 	while True:
-		response = sendBriCommand('briver\n')
+		response = sendBriCommand('ping\n')
 		print(response.encode('utf-8').decode('utf-8'))
 		time.sleep(2)
 except KeyboardInterrupt:		# salta al pulsar contrl+C

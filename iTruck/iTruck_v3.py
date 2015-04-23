@@ -11,47 +11,71 @@ import tkinter as tk
 import xml.etree.ElementTree as ET
 import socket
 import datetime
-import psycopg2			#for postgress connection
-import threading
+import psycopg2					#for postgress connection
+import threading 
 import os
 import gps3
 import time
 import queue
 
+"""structure for database tables"""
+class databaseEntry:
+	
 
-class dataEntry:
+	"""Constructor and setting variables"""
 	def __init__(self):
 		self.id=0
 		self.truckId=0
-		self.timeCreated=datetime.datetime.now()
+		self.time=datetime.datetime.now()
 		self.longitude=0
 		self.latitude=0
 		self.altitude=0
 		self.speed=0
 		self.EPCData='H111122223333AAAA'
 		self.isSent=False
-		self.comments='default comment'
-	
-
-# Clase que será actualizada por el hilo del GPS
-class gpsLastData():	
-	lastLatitude ='nothing received'	
-	lastLongitude ='nothing received'		
-	lastDatetime ='nothing received'	
-	lastAltitude ='nothing received'	
-	lastSpeed ='nothing received'	
-	lastTime ='nothing received'
+		self.comments=''
 
 
-class myTkinterApp():
+
+"""structure for data received from GPS"""
+class gpsPoint:
+
+
+	def __init__(self):
+		self.Speed='notYetReceived'
+		self.Latitude='notYetReceived'
+		self.Longitude='notYetReceived'
+		self.Altitude='notYetReceived'
+		self.Time='notYetReceived'
 	
-	TCP_IP_RFID_READER='192.168.0.222' #ATENCION: Cambiar la IP desde la pantalla conguración
-	TCP_PORT_RFID_READER=2189
-	BUFFER_SIZE_RFID_READER=512
 	
+	
+"""main class to create the UI"""
+class Gui():	
+	
+
+	
+	"""Variables definition"""	
+	
+	#Status variables
+	isThereGps = False
+	isThereGprs = False
+	isThereRfidReader =False	
 	
 	commandList=['']
 	numCommands=[0, 0]			#[total commands, next command to be processed]
+	
+	#create the queue
+	myQueue =queue.Queue()
+	
+	#create the Gps point to store last position
+	myLastGpsPoint=gpsPoint()
+	
+		
+	#RFID Reader Variables
+	TCP_IP_RFID_READER='192.168.0.222' #ATENCION: Cambiar la IP desde la pantalla conguración
+	TCP_PORT_RFID_READER=2189
+	BUFFER_SIZE_RFID_READER=512	
 	
 	ATTRIB_ANTS='1,2,3,4'		# 'ATTRIB ANTS=1,2,3,4\n' defines de sequence of antennas when reading
 	ATTRIB_TAGTYPE='EPCC1G2'	# 'ATTRIB TAGTYPE=EPCC1G2\n' defines the tag to be read
@@ -80,15 +104,31 @@ class myTkinterApp():
 	ATTRIB_NOTAGRPT='ON'		# 'ATTRIB NOTAGRPT=ON\n' send a message when no tags are found	
 	ATTRIB_IDREPORT='ON'		# 'ATTRIB IDREPORT=ON\n' configure reader to send tag identifiers when a command is executed
 	ATTRIB_SCHEDOPT='1'			# 'ATTRIB SCHEDOPT=1\n' same as SCHEDULEOPT	
-	
-	
-	def __init__(self):
 		
-		#we create the queue to store Asyncronous messages (i.e. GPS)
-		self.queue = queue
+	
+	"""	Initial code """
+	def __init__(self, master):
 		
-		#main window
-		self.root= tk.Tk()	 
+		
+		self.root = master
+		
+		# loading the main gui widgets: buttons, texts, textlog
+		self.loadMainGui()
+		
+		# Loading xml config file, updating internal variables
+		self.loadXmlFile()		
+		
+		#initializing steps: check for GPS, GPRS and RFID reader and update color circles	
+		self.initializing()	
+		
+		# Starts periodic method 
+		self.root.after(500, self.updateMe)
+	
+		
+	""" loading the main gui widgets: buttons, texts, textlog """
+	def loadMainGui(self):
+	
+		#main window 
 		self.root.wm_title('iTruck')	#title of the main window 
 		
 		#Left frame and its contents
@@ -189,49 +229,238 @@ class myTkinterApp():
 		self.textLog.insert(tk.END, "Current date: "+currentTime+"\n")
 		self.textLog.pack()
 		scrollbar.config(command=self.textLog.yview)
-		
-		#initializing steps	
-		self.initializing()
-		
-		self.root.after(5000, self.updateGps)
-		
-		self.root.mainloop()	#execution line stops here					
-
 	
+		
+	"""updates internal variables with values stored in XML file """
+	def loadXmlFile(self):
+		
+		#here we try to connect to the xml file		
+		try:
+			tree=ET.parse('config.xml')
+			XMLroot=tree.getroot()
+			self.textLog.insert(tk.END, "Config file found\n")	
+		except:	
+			self.textLog.insert(tk.END, "Config file not found\n")
+
+		#TCP Congiguration Info		
+		if not XMLroot[0][0].text:		#empty trings give error, so we identify first if the string is empty
+			self.TCP_IP_RFID_READER=''
+		else:	
+			self.TCP_IP_RFID_READER=XMLroot[0][0].text	#if it is not empty				
+
+		if not XMLroot[0][1].text:		#empty trings give error, so we identify first if the string is empty
+			self.TCP_PORT_RFID_READER=0
+		else:	
+			self.TCP_PORT_RFID_READER=int(XMLroot[0][1].text)	#if it is not empty		
+
+		if not XMLroot[0][2].text:		#empty trings give error, so we identify first if the string is empty
+			self.BUFFER_SIZE_RFID_READER=0
+		else:	
+			self.BUFFER_SIZE_RFID_READER=int(XMLroot[0][2].text)	#if it is not empty		
+
+		#RFID Congiguration Info - BRI Commands
+		if not XMLroot[1][0].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_ANTS=''
+		else:	
+			self.ATTRIB_ANTS=XMLroot[1][0].text	#if it is not empty	
+
+		if not XMLroot[1][1].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_TAGTYPE=''
+		else:	
+			self.ATTRIB_TAGTYPE=XMLroot[1][1].text	#if it is not empty	
+			
+		if not XMLroot[1][2].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_FIELDSTRENGTH=''
+		else:	
+			self.ATTRIB_FIELDSTRENGTH=XMLroot[1][2].text	#if it is not empty	
+
+		if not XMLroot[1][3].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_RDTRIES=''
+		else:	
+			self.ATTRIB_RDTRIES=XMLroot[1][3].text	#if it is not empty	
+
+		if not XMLroot[1][4].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_RPTTIMEOUT=''
+		else:	
+			self.ATTRIB_RPTTIMEOUT=XMLroot[1][4].text	#if it is not empty	
+			
+		if not XMLroot[1][5].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_IDTIMEOUT=''
+		else:	
+			self.ATTRIB_IDTIMEOUT=XMLroot[1][5].text	#if it is not empty	
+
+		if not XMLroot[1][6].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_ANTTIMEOUT=''
+		else:	
+			self.ATTRIB_ANTTIMEOUT=XMLroot[1][6].text	#if it is not empty	
+
+		if not XMLroot[1][7].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_IDTRIES=''
+		else:	
+			self.ATTRIB_IDTRIES=XMLroot[1][7].text	#if it is not empty	
+			
+		if not XMLroot[1][8].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_ANTTRIES=''
+		else:	
+			self.ATTRIB_ANTTRIES=XMLroot[1][8].text	#if it is not empty	
+
+		if not XMLroot[1][9].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_WRTRIES=''
+		else:	
+			self.ATTRIB_WRTRIES=XMLroot[1][9].text	#if it is not empty	
+
+		if not XMLroot[1][10].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_LOCKTRIES=''
+		else:	
+			self.ATTRIB_LOCKTRIES=XMLroot[1][10].text	#if it is not empty	
+			
+		if not XMLroot[1][11].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SELTRIES=''
+		else:	
+			self.ATTRIB_SELTRIES=XMLroot[1][11].text	#if it is not empty	
+
+		if not XMLroot[1][12].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_UNSELTRIES=''
+		else:	
+			self.ATTRIB_UNSELTRIES=XMLroot[1][12].text	#if it is not empty	
+
+		if not XMLroot[1][13].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_INITTRIES=''
+		else:	
+			self.ATTRIB_INITTRIES=XMLroot[1][13].text	#if it is not empty	
+			
+		if not XMLroot[1][14].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_INITIALQ=''
+		else:	
+			self.ATTRIB_INITIALQ=XMLroot[1][14].text	#if it is not empty	
+
+		if not XMLroot[1][15].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_QUERYSEL=''
+		else:	
+			self.ATTRIB_QUERYSEL=XMLroot[1][15].text	#if it is not empty	
+
+		if not XMLroot[1][16].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_QUERYTARGET=''
+		else:	
+			self.ATTRIB_QUERYTARGET=XMLroot[1][16].text	#if it is not empty	
+			
+		if not XMLroot[1][17].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SESSION=''
+		else:	
+			self.ATTRIB_SESSION=XMLroot[1][17].text	#if it is not empty	
+
+		if not XMLroot[1][18].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_LBTCHANNEL=''
+		else:	
+			self.ATTRIB_LBTCHANNEL=XMLroot[1][18].text	#if it is not empty	
+
+		if not XMLroot[1][19].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SCHEDULEOPT=''
+		else:	
+			self.ATTRIB_SCHEDULEOPT=XMLroot[1][19].text	#if it is not empty	
+			
+		if not XMLroot[1][20].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_FIELDSEP=''
+		else:	
+			self.ATTRIB_FIELDSEP=XMLroot[1][20].text	#if it is not empty	
+
+		if not XMLroot[1][21].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_BROADCASTSYNC=''
+		else:	
+			self.ATTRIB_BROADCASTSYNC=XMLroot[1][21].text	#if it is not empty	
+
+		if not XMLroot[1][22].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_UTCTIME=''
+		else:	
+			self.ATTRIB_UTCTIME=XMLroot[1][22].text	#if it is not empty	
+			
+		if not XMLroot[1][23].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_TIMEOUTMODE=''
+		else:	
+			self.ATTRIB_TIMEOUTMODE=XMLroot[1][23].text	#if it is not empty	
+
+		if not XMLroot[1][24].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_NOTAGRPT=''
+		else:	
+			self.ATTRIB_NOTAGRPT=XMLroot[1][24].text	#if it is not empty	
+
+		if not XMLroot[1][25].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_IDREPORT=''
+		else:	
+			self.ATTRIB_IDREPORT=XMLroot[1][25].text	#if it is not empty	
+			
+		if not XMLroot[1][26].text:		#empty trings give error, so we identify first if the string is empty
+			self.ATTRIB_SCHEDOPT=''
+		else:	
+			self.ATTRIB_SCHEDOPT=XMLroot[1][26].text	#if it is not empty	
+		
+		self.textLog.insert(tk.END, "Xml file loaded successfully\n")
+		self.textLog.insert(tk.END, "--------------------\n")
+		self.textLog.yview(tk.END)  #to keep the last text always visible
+			
+	
+	"""check for GPS, GPRS and RFID reader and update color circles"""
 	def initializing(self):
+		
+	
+		#This updates the reader status
 		response= self.sendSingleBriCommand('ping\n')
 		self.textLog.insert(tk.END, 'IP RFID Reader:' + self.TCP_IP_RFID_READER + '\n')		
 		newResponse=response[0:2] #Here we remove all answered text except from where OK is placed
 		
 		if newResponse =="OK":	 #to change from byte to utf-8		
+			self.isThereRfidReader = True
+		else:
+			self.isThereRfidReader = False		
+		
+	
+		
+		self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='red')
+
+
+	"""Updates main Window periodically: GPS, GPRS, RFID Reader Status, Queue data"""
+	def updateMe(self):	
+	
+	
+		# first we check for status				
+		if self.isThereGps is True:			
+			self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='green')
+		else:
+			self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='red')
+
+		if self.isThereRfidReader is True:			
 			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='green')
-			self.textLog.insert(tk.END, 'RFID reader OK \n')				
-			self.textLog.yview(tk.END)  #to keep the last text always visible
 		else:
 			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='red')
-			self.textLog.insert(tk.END, 'RFID reader NOT OK \n')				
-			self.textLog.yview(tk.END)  #to keep the last text always visible			
 		
-		#Loading xml config file
-		self.loadXmlFile()
-		
-		self.textLog.insert(tk.END, "--------------------\n")	
-
-
-	"""To process incoming info (GPS)"""
-	def processIncomingInfo(self):
-		while self.queue.gsize():
+					
+		# then we check for new data in the queue
+		while self.myQueue.qsize():
 			try: 
-				msg.self.queue.get(0)
+				newPoint=self.myQueue.get(0)
 				#Here we do something with the queued value
+				
+				self.myLastGpsPoint=newPoint
+				
+				self.isThereGps=True
 			
-				self.textLog.insert(tk.END, msg + '\n')
-				self.textLog.yview(tk.END)  #to keep the last text always visible
+				#self.textLog.insert(tk.END, 'Time: ' + str(self.myLastGpsPoint.Time) + '\n')
+				#self.textLog.insert(tk.END, 'Latitude: ' + str(self.myLastGpsPoint.Latitude) + '\n')
+				#self.textLog.yview(tk.END)  #to keep the last text always visible
 		
-			except Queue.Empty:
+			except myQueue.Empty:
+				#self.textLog.insert(tk.END, 'empty queue' + '\n')
+				#self.textLog.yview(tk.END)  #to keep the last text always visible
 				pass
+		
+		#finally the task launches again itself after some time
+		self.root.after(500, self.updateMe)
 
+
+	"""launches a new window to configure the RFID reader"""
 	def createConfigureWindow(self):
+		
+		
 		topWindow=tk.Toplevel()
 		topWindow.wm_title("Configuration")		
 		
@@ -497,8 +726,9 @@ class myTkinterApp():
 		exitTopWindow.grid(row=23, column=4, padx=10, pady=4, sticky=tk.W+tk.E)		
 	
 	
+	"""sends a single instruction to the RFID Reader"""		
 	def btnSendTestCommand_click(self):
-		
+
 		command= self.eTestRfid.get()+'\n'
 		self.textLog.insert(tk.END, "sending command: " + command )			
 		response = self.sendSingleBriCommand(command)
@@ -506,9 +736,10 @@ class myTkinterApp():
 		self.textLog.insert(tk.END, newResponse)				
 		self.textLog.yview(tk.END)  #to keep the last text always visible
 		
-	
+
+	"""sends all configuration  instructions to the reader, and after it reads tags"""	
 	def btnLoadTestCommand_click(self):			
-		
+	
 		#here we create the desired list of commands
 		self.commandList =[
 		'VER\n',
@@ -547,6 +778,7 @@ class myTkinterApp():
 		self.sendMultipleBriCommands()
 		
 
+	"""sends a read tag instruction to the RFID reader"""	
 	def btnReadTestCommand_click(self):
 		command= 'Read\n'
 		self.textLog.insert(tk.END, "sending command: " + command )			
@@ -554,9 +786,11 @@ class myTkinterApp():
 		newResponse=response.replace('\r','')
 		self.textLog.insert(tk.END, newResponse)				
 		self.textLog.yview(tk.END)  #to keep the last text always visible
-		
-		
+
+
+	"""sends a write tag instructino to the RFID reader"""	
 	def btnWriteTestCommand_click(self):
+
 		command= 'W EPCID =' + self.eTagData.get()+'\n'
 		self.textLog.insert(tk.END, "sending command: " + command )			
 		response = self.sendSingleBriCommand(command)
@@ -564,9 +798,11 @@ class myTkinterApp():
 		newResponse=response.replace('\r','')
 		self.textLog.insert(tk.END, newResponse)				
 		self.textLog.yview(tk.END)  #to keep the last text always visible
+
 	
-		
+	"""read all tags trough the Reader and instroduces the info in the database"""		
 	def btnStoreInDb_click(self):
+
 		command= 'Read\n'
 		self.textLog.insert(tk.END, "sending command: " + command )			
 		response = self.sendSingleBriCommand(command)
@@ -578,19 +814,28 @@ class myTkinterApp():
 		listResponses=response.split('\r\n') 	# this leaves an empty element in the list
 		
 		#self.textLog.insert(tk.END, 'Response received:\n'+ repr(listResponses) + '\n')			
-		#listResponses.remove(' ')				# the empty element is removed
+		#listResponses.remove('')				# the empty element is removed
 		
 		listPoints=[]
 		
 		#for the number of responses in the list, do...
 		for i in range(len(listResponses)):
 			#we create a point
-			p = dataEntry()
+			p = databaseEntry()
 			
 			#we put the value in place
 			p.EPCData=listResponses.pop()
 			
-			if p.EPCData != ('NOTAG'):
+			
+			if p.EPCData != ('NOTAG') and p.EPCData != ('')and self.isThereGps:
+				
+				p.latitude = self.myLastGpsPoint.Latitude
+				p.longitude=self.myLastGpsPoint.Longitude
+				p.altitude=self.myLastGpsPoint.Altitude
+				p.time=self.myLastGpsPoint.Time
+				self.textLog.insert(tk.END, 'time ' + p.time + ' . \n')
+				p.speed=self.myLastGpsPoint.Speed
+				
 				#we add it to the list	of points
 				listPoints.append(p)				
 				self.textLog.insert(tk.END, 'point generated\n')
@@ -607,12 +852,17 @@ class myTkinterApp():
 		self.textLog.yview(tk.END)
 
 
+	"""checks last received gps point and shows it in the textLog"""
 	def btnReadGpsData_click(self):
-		self.textLog.insert(tk.END, 'LastLatitude: ' + str(miGpsLastData.lastLatitude) + '\n')
 
-
+		self.textLog.insert(tk.END, 'Last Measured point: Time ' + str(self.myLastGpsPoint.Time) + '\n')
+		self.textLog.insert(tk.END, 'Last Measured point: Altitude ' + str(self.myLastGpsPoint.Altitude) + '\n')
+		self.textLog.yview(tk.END)  #to keep the last text always visible
+		
+	"""connects to the database and executes query to introduce points"""
 	def storePointInDb(self, p):
-	
+
+		
 		# first we try to connect
 		try:
 			conn=psycopg2.connect("dbname='slope_db' user='postgres' host='localhost' password='p@ssw0rd'")
@@ -625,7 +875,7 @@ class myTkinterApp():
 		cur=conn.cursor()
 		
 		#now we execute a query
-		query="INSERT INTO itruck (truck_id, time_created, longitude, latitude, altitude, speed, epc_data, is_sent, comments) VALUES (" + str(p.truckId) + ", '" + str(p.timeCreated)+ "', " + str(p.longitude) + ", " + str(p.latitude) + ", " + str(p.altitude) + ", " + str(p.speed) + ", '" + p.EPCData + "', " + str(p.isSent) + ", '" + p.comments + "')"
+		query="INSERT INTO itruck (truck_id, time_created, longitude, latitude, altitude, speed, epc_data, is_sent, comments) VALUES (" + str(p.truckId) + ", '" + str(p.time)+ "', " + str(p.longitude) + ", " + str(p.latitude) + ", " + str(p.altitude) + ", " + str(p.speed) + ", '" + p.EPCData + "', " + str(p.isSent) + ", '" + p.comments + "')"
 		
 		#self.textLog.insert(tk.END, query)
 		
@@ -639,7 +889,9 @@ class myTkinterApp():
 		conn.close()
 
 
+	"""sends multiple Bri commands to the RFID reader, with some time separation"""
 	def sendMultipleBriCommands(self):
+	
 		
 		if (self.numCommands[0] > 0) and (self.numCommands[0] > self.numCommands[1]):
 			self.textLog.insert(tk.END, self.commandList[self.numCommands[1]])
@@ -657,7 +909,9 @@ class myTkinterApp():
 			self.commandList=['']
 
 
+	"""creates a TCP socket, sends a single command to the reader, and receive the answer"""
 	def sendSingleBriCommand(self, command):
+	
 		 
 		try:
 			s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -677,8 +931,9 @@ class myTkinterApp():
 		
 		finally:
 			return responseAsString
+
 			
-			
+	"""takes all info in the configuration widgets and generate a new xml config file"""			
 	def saveXmlFile(self):
 		
 		config=ET.Element("config")
@@ -813,179 +1068,17 @@ class myTkinterApp():
 		self.textLog.insert(tk.END, "Xml file generated succcessfully\n")
 		self.textLog.yview(tk.END)  #to keep the last text always visible
 
-			
-	def loadXmlFile(self):
-		
-		#here we try to connect to the xml file		
-		try:
-			tree=ET.parse('config.xml')
-			XMLroot=tree.getroot()
-			self.textLog.insert(tk.END, "Config file found\n")	
-		except:	
-			self.textLog.insert(tk.END, "Config file not found\n")
 
-		#TCP Congiguration Info		
-		if not XMLroot[0][0].text:		#empty trings give error, so we identify first if the string is empty
-			self.TCP_IP_RFID_READER=''
-		else:	
-			self.TCP_IP_RFID_READER=XMLroot[0][0].text	#if it is not empty				
-
-		if not XMLroot[0][1].text:		#empty trings give error, so we identify first if the string is empty
-			self.TCP_PORT_RFID_READER=0
-		else:	
-			self.TCP_PORT_RFID_READER=int(XMLroot[0][1].text)	#if it is not empty		
-
-		if not XMLroot[0][2].text:		#empty trings give error, so we identify first if the string is empty
-			self.BUFFER_SIZE_RFID_READER=0
-		else:	
-			self.BUFFER_SIZE_RFID_READER=int(XMLroot[0][2].text)	#if it is not empty		
-
-		#RFID Congiguration Info - BRI Commands
-		if not XMLroot[1][0].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_ANTS=''
-		else:	
-			self.ATTRIB_ANTS=XMLroot[1][0].text	#if it is not empty	
-
-		if not XMLroot[1][1].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_TAGTYPE=''
-		else:	
-			self.ATTRIB_TAGTYPE=XMLroot[1][1].text	#if it is not empty	
-			
-		if not XMLroot[1][2].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_FIELDSTRENGTH=''
-		else:	
-			self.ATTRIB_FIELDSTRENGTH=XMLroot[1][2].text	#if it is not empty	
-
-		if not XMLroot[1][3].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_RDTRIES=''
-		else:	
-			self.ATTRIB_RDTRIES=XMLroot[1][3].text	#if it is not empty	
-
-		if not XMLroot[1][4].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_RPTTIMEOUT=''
-		else:	
-			self.ATTRIB_RPTTIMEOUT=XMLroot[1][4].text	#if it is not empty	
-			
-		if not XMLroot[1][5].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_IDTIMEOUT=''
-		else:	
-			self.ATTRIB_IDTIMEOUT=XMLroot[1][5].text	#if it is not empty	
-
-		if not XMLroot[1][6].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_ANTTIMEOUT=''
-		else:	
-			self.ATTRIB_ANTTIMEOUT=XMLroot[1][6].text	#if it is not empty	
-
-		if not XMLroot[1][7].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_IDTRIES=''
-		else:	
-			self.ATTRIB_IDTRIES=XMLroot[1][7].text	#if it is not empty	
-			
-		if not XMLroot[1][8].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_ANTTRIES=''
-		else:	
-			self.ATTRIB_ANTTRIES=XMLroot[1][8].text	#if it is not empty	
-
-		if not XMLroot[1][9].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_WRTRIES=''
-		else:	
-			self.ATTRIB_WRTRIES=XMLroot[1][9].text	#if it is not empty	
-
-		if not XMLroot[1][10].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_LOCKTRIES=''
-		else:	
-			self.ATTRIB_LOCKTRIES=XMLroot[1][10].text	#if it is not empty	
-			
-		if not XMLroot[1][11].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_SELTRIES=''
-		else:	
-			self.ATTRIB_SELTRIES=XMLroot[1][11].text	#if it is not empty	
-
-		if not XMLroot[1][12].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_UNSELTRIES=''
-		else:	
-			self.ATTRIB_UNSELTRIES=XMLroot[1][12].text	#if it is not empty	
-
-		if not XMLroot[1][13].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_INITTRIES=''
-		else:	
-			self.ATTRIB_INITTRIES=XMLroot[1][13].text	#if it is not empty	
-			
-		if not XMLroot[1][14].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_INITIALQ=''
-		else:	
-			self.ATTRIB_INITIALQ=XMLroot[1][14].text	#if it is not empty	
-
-		if not XMLroot[1][15].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_QUERYSEL=''
-		else:	
-			self.ATTRIB_QUERYSEL=XMLroot[1][15].text	#if it is not empty	
-
-		if not XMLroot[1][16].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_QUERYTARGET=''
-		else:	
-			self.ATTRIB_QUERYTARGET=XMLroot[1][16].text	#if it is not empty	
-			
-		if not XMLroot[1][17].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_SESSION=''
-		else:	
-			self.ATTRIB_SESSION=XMLroot[1][17].text	#if it is not empty	
-
-		if not XMLroot[1][18].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_LBTCHANNEL=''
-		else:	
-			self.ATTRIB_LBTCHANNEL=XMLroot[1][18].text	#if it is not empty	
-
-		if not XMLroot[1][19].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_SCHEDULEOPT=''
-		else:	
-			self.ATTRIB_SCHEDULEOPT=XMLroot[1][19].text	#if it is not empty	
-			
-		if not XMLroot[1][20].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_FIELDSEP=''
-		else:	
-			self.ATTRIB_FIELDSEP=XMLroot[1][20].text	#if it is not empty	
-
-		if not XMLroot[1][21].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_BROADCASTSYNC=''
-		else:	
-			self.ATTRIB_BROADCASTSYNC=XMLroot[1][21].text	#if it is not empty	
-
-		if not XMLroot[1][22].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_UTCTIME=''
-		else:	
-			self.ATTRIB_UTCTIME=XMLroot[1][22].text	#if it is not empty	
-			
-		if not XMLroot[1][23].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_TIMEOUTMODE=''
-		else:	
-			self.ATTRIB_TIMEOUTMODE=XMLroot[1][23].text	#if it is not empty	
-
-		if not XMLroot[1][24].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_NOTAGRPT=''
-		else:	
-			self.ATTRIB_NOTAGRPT=XMLroot[1][24].text	#if it is not empty	
-
-		if not XMLroot[1][25].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_IDREPORT=''
-		else:	
-			self.ATTRIB_IDREPORT=XMLroot[1][25].text	#if it is not empty	
-			
-		if not XMLroot[1][26].text:		#empty trings give error, so we identify first if the string is empty
-			self.ATTRIB_SCHEDOPT=''
-		else:	
-			self.ATTRIB_SCHEDOPT=XMLroot[1][26].text	#if it is not empty	
-		
-		self.textLog.insert(tk.END, "Xml file loaded successfully\n")
-		self.textLog.yview(tk.END)  #to keep the last text always visible
-			
-			
+	""" destroys the main application window"""			
 	def exitBtn_click(self):
+
 		self.root.destroy()
 
 
+	"""takes all the text existing in the textLog and saves it in a text File"""
 	def saveLogButton_click(self):
-		
+	
+	
 		currentDate = str(datetime.datetime.now().strftime('%x').replace("/", "-"))
 		currentTime=str(datetime.datetime.now().strftime('%X').replace(":", "-"))
 		fileName=currentDate + '_' + currentTime + '_Log.txt'
@@ -1009,7 +1102,6 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Defines de sequence of antennas when reading")
 		self.e4.focus()
 
-
 	def cfgBtn2_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. EPCC1G2")
@@ -1017,14 +1109,12 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Defines the tag to be read")	
 		self.e5.focus()
 		
-
 	def cfgBtn3_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 29DB,29DB,29DB,29DB")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define the RF power for each antenna")
 		self.e6.focus()
-
 
 	def cfgBtn4_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1033,7 +1123,6 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Number of attempts to read a tag before a response is returned")
 		self.e7.focus()
 
-
 	def cfgBtn5_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 0")
@@ -1041,14 +1130,12 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Sets delay in response")
 		self.e8.focus()
 		
-
 	def cfgBtn6_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 4000")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets maximum time attempting to read tags")
 		self.e9.focus()
-
 
 	def cfgBtn7_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1057,14 +1144,12 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Sets maximum time attempting to use antenna when reading tags")
 		self.e10.focus()
 
-
 	def cfgBtn8_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times an attemp is made to read tags")
 		self.e11.focus()
-
 
 	def cfgBtn9_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1073,14 +1158,12 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Sets number of times each antenna is used  for Read/Write")
 		self.e12.focus()
 
-
 	def cfgBtn10_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 3")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times an attempt is made to Write Data")
 		self.e13.focus()
-
 
 	def cfgBtn11_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1089,14 +1172,12 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Sets number of times the lock algorithm is executed before answering")
 		self.e14.focus()
 
-
 	def cfgBtn12_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets number of times a group select is attempted")
 		self.e15.focus()
-
 
 	def cfgBtn13_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1105,14 +1186,12 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Sets number of times a group unselect is attempted")
 		self.e16.focus()
 
-
 	def cfgBtn14_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Sets initialization tries")
 		self.e17.focus()
-
 
 	def cfgBtn15_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1121,15 +1200,13 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Definite Q parameter value of the query command")
 		self.e18.focus()
 
-
 	def cfgBtn16_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 4")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define sel field for query commands")
 		self.e19.focus()
-
-		
+	
 	def cfgBtn17_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. A")
@@ -1137,15 +1214,13 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Define target field for query commands")
 		self.e20.focus()
 
-
 	def cfgBtn18_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define session parameter")		
 		self.e21.focus()
-		
-		
+			
 	def cfgBtn19_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 7")
@@ -1153,22 +1228,19 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Define channel for Listen-Before-Talk algorithm")
 		self.e22.focus()
 
-
 	def cfgBtn20_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define how antennas are switched")
 		self.e23.focus()
-		
-		
+			
 	def cfgBtn21_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. ' '")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define separator in output")
 		self.e24.focus()
-
 
 	def cfgBtn22_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1177,7 +1249,6 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Value of UTCTime sent in BroadcastsSync commands")
 		self.e25.focus()
 
-
 	def cfgBtn23_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1094")
@@ -1185,22 +1256,19 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Define the usage of timeout and tries attributes")
 		self.e26.focus()
 
-
 	def cfgBtn24_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. OFF")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Define separator in output")
 		self.e27.focus()
-
-		
+	
 	def cfgBtn25_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. ON")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Send a message when no tags are found")
 		self.e28.focus()
-
 
 	def cfgBtn26_click(self):
 		self.tExample.delete("1.0", tk.END)
@@ -1209,36 +1277,60 @@ class myTkinterApp():
 		self.tDescription.insert(tk.END, "Configure reader to send tag identifiers when a command is executed")
 		self.e29.focus()
 
-
 	def cfgBtn27_click(self):
 		self.tExample.delete("1.0", tk.END)
 		self.tExample.insert(tk.END, "i.e. 1")
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Same as SCHEDULEOPT")
 		self.e30.focus()
-						
-	
-	# método que siempre estará en marcha y actualizando el objeto miGps
-def metodoGpsParaThread():
-	the_connection=gps3.GPSDSocket()
-	the_fix=gps3.Fix()
 
-	while 1:
-		time.sleep(4)
-		try:
-			#print('antes esperar'.encode('utf-8').decode('utf-8')) 
-				
-			for new_data in the_connection:
+	
+		
+"""	class to create the Gps-measuring thread"""	
+class gpsWorkerThread(threading.Thread):
+	
+	
+	def __init__(self, receivedQueue):	
+		"""Constructor and setting variables"""	
+	
+		self.isRunning = True
+		self.myQueue = receivedQueue
+		self.myPoint= gpsPoint()
+		
+		threading.Thread.__init__(self)	#necessary or we will have an error
+		
+	
+	def run(self):
+		"""
+		Main method
+		"""
 			
+		print('while starts'.encode('utf-8').decode('utf-8'))
+		# This creates a socket to connect to the GPS serial device
+		the_connection=gps3.GPSDSocket()
+		
+		# This created an adapter to recover and translate data from the socket 
+		the_fix=gps3.Fix()
+					
+		# It is very imporant to stop the thread from time to time
+		# To allow execution of the main tkinter window		
+		
+		
+			
+		try:				
+			for new_data in the_connection: #always inside here because of big amount of data									
+				
 				if new_data:
 					the_fix.refresh(new_data) 
 						
 				if not isinstance(the_fix.TPV['speed'],str):
-					miGpsLastData.lastSpeed = the_fix.TPV['speed']
-					miGpsLastData.lastLatitude=the_fix.TPV['lat']
-					miGpsLastData.lastLongitude=the_fix.TPV['lon']
-					miGpsLastData.lastAltitude=the_fix.TPV['alt']
-					miGpsLastData.lastTime=the_fix.TPV['time']				
+					self.myPoint.Speed = the_fix.TPV['speed']
+					self.myPoint.Latitude=the_fix.TPV['lat']
+					self.myPoint.Longitude=the_fix.TPV['lon']
+					self.myPoint.Altitude=the_fix.TPV['alt']
+					self.myPoint.Time=the_fix.TPV['time']
+									
+					self.myQueue.put(self.myPoint)
 					
 					if isinstance(the_fix.TPV['track'], str):  # 'track' frequently is missing and returns as 'n/a'
 						heading = the_fix.TPV['track']
@@ -1246,21 +1338,51 @@ def metodoGpsParaThread():
 						heading = round(the_fix.TPV['track'])  # and heading percision in hundreths is just clutter.
 				else:
 					pass
-
+				
+				time.sleep(1)	
+				
+				if not self.isRunning:
+					break				
+		
 		except:
 			pass
-			#print('exception'.encode('utf-8').decode('utf-8'))  
-	
-	
-#main loop 
-# if __name__  works ok in a direct execution. However, if the file is executed from another module, it is not executed
-# that allows the other module to use de defined functions in this file without problems 
-if __name__== '__main__':
-	
-	miGpsLastData = gpsLastData()
-	
-	t=threading.Thread(target=metodoGpsParaThread)
-	t.start()
+			
+
+						
 		
-	myapp=myTkinterApp()
+	def stop(self):
+		print('stopping thread'.encode('utf-8').decode('utf-8'))
+		self.isRunning = False
+			
+			
+	
+"""		Main loop.
+if __name__  works ok in a direct execution. However, if the file is executed from another module, it is not executed
+that allows the other module to use de defined functions in this file without problems
+"""	
+if __name__== '__main__':
+
+	
+	# This creates a toplevel widget of Tk, usually the main application window
+	mainWindow=tk.Tk()
+	
+	#this fills the toplevel window
+	client = Gui(mainWindow)
+	
+	#now we create a Worker. They report to a queue in mainWindow
+	Worker1 =gpsWorkerThread (client.myQueue)
+	
+	thread1=gpsWorkerThread(client.myQueue)
+	thread1.start()
+	
+	# finally this launches the top level window. Execution line stops here	
+	mainWindow.mainloop() 
+	
+	print('main Window closed'.encode('utf-8').decode('utf-8'))
+	#once the mainWindow in closed, this is executed
+	thread1.stop()
+	
+	thread1.join()
+	
+
 	

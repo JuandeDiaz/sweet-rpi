@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+	<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+		<soap:Body><GetDevicesAliasResponse xmlns="http://tempuri.org/">
+			<GetDevicesAliasResult>
+				<Devices>
+					<id>183</id>
+					<serialNo>352848029785355</serialNo>
+					<alias>6886 HRB</alias>
+					<telephoneNo/>
+					<description>electric</description>
+					<isActive>true</isActive>
+					<creationDate>0001-01-01T00:00:00</creationDate>
+				</Devices>
+				<Devices>
+					<id>182</id>
+					<serialNo>352848029634637</serialNo>
+					<alias>1635 HPS</alias>
+					<telephoneNo/>
+					<description>electric</description>
+					<isActive>true</isActive>
+					<creationDate>0001-01-01T00:00:00</creationDate>
+				</Devices>
+			</GetDevicesAliasResult>
+		</GetDevicesAliasResponse>
+	</soap:Body></soap:Envelope>

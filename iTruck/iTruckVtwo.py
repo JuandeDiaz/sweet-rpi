@@ -33,25 +33,22 @@ class dataEntry:
 		self.comments='default comment'
 	
 
-# Clase que será actualizada por el hilo del GPS
-class gpsLastData():	
-	lastLatitude ='nothing received'	
-	lastLongitude ='nothing received'		
-	lastDatetime ='nothing received'	
-	lastAltitude ='nothing received'	
-	lastSpeed ='nothing received'	
-	lastTime ='nothing received'
-
-
-class myTkinterApp():
+class guiPart():
+		
+	# Variables definition
 	
-	TCP_IP_RFID_READER='192.168.0.222' #ATENCION: Cambiar la IP desde la pantalla conguración
-	TCP_PORT_RFID_READER=2189
-	BUFFER_SIZE_RFID_READER=512
-	
+	#Status variables
+	isThereGps = False
+	isThereGprs = False
+	isThereRfidReader =False	
 	
 	commandList=['']
 	numCommands=[0, 0]			#[total commands, next command to be processed]
+	
+	#RFID Reader Variables
+	TCP_IP_RFID_READER='192.168.0.222' #ATENCION: Cambiar la IP desde la pantalla conguración
+	TCP_PORT_RFID_READER=2189
+	BUFFER_SIZE_RFID_READER=512	
 	
 	ATTRIB_ANTS='1,2,3,4'		# 'ATTRIB ANTS=1,2,3,4\n' defines de sequence of antennas when reading
 	ATTRIB_TAGTYPE='EPCC1G2'	# 'ATTRIB TAGTYPE=EPCC1G2\n' defines the tag to be read
@@ -80,15 +77,14 @@ class myTkinterApp():
 	ATTRIB_NOTAGRPT='ON'		# 'ATTRIB NOTAGRPT=ON\n' send a message when no tags are found	
 	ATTRIB_IDREPORT='ON'		# 'ATTRIB IDREPORT=ON\n' configure reader to send tag identifiers when a command is executed
 	ATTRIB_SCHEDOPT='1'			# 'ATTRIB SCHEDOPT=1\n' same as SCHEDULEOPT	
-	
-	
-	def __init__(self):
 		
-		#we create the queue to store Asyncronous messages (i.e. GPS)
+	
+	def __init__(self, master, queue):
+		
 		self.queue = queue
-		
-		#main window
-		self.root= tk.Tk()	 
+		self.root = master
+	
+		#main window 
 		self.root.wm_title('iTruck')	#title of the main window 
 		
 		#Left frame and its contents
@@ -191,45 +187,60 @@ class myTkinterApp():
 		scrollbar.config(command=self.textLog.yview)
 		
 		#initializing steps	
-		self.initializing()
-		
-		self.root.after(5000, self.updateGps)
-		
-		self.root.mainloop()	#execution line stops here					
+		self.initializing()				
 
 	
 	def initializing(self):
+		
+		#This updates the reader status
 		response= self.sendSingleBriCommand('ping\n')
 		self.textLog.insert(tk.END, 'IP RFID Reader:' + self.TCP_IP_RFID_READER + '\n')		
 		newResponse=response[0:2] #Here we remove all answered text except from where OK is placed
 		
 		if newResponse =="OK":	 #to change from byte to utf-8		
-			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='green')
-			self.textLog.insert(tk.END, 'RFID reader OK \n')				
-			self.textLog.yview(tk.END)  #to keep the last text always visible
+			self.isThereRfidReader = True
 		else:
-			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='red')
-			self.textLog.insert(tk.END, 'RFID reader NOT OK \n')				
-			self.textLog.yview(tk.END)  #to keep the last text always visible			
+			self.isThereRfidReader = False		
 		
 		#Loading xml config file
 		self.loadXmlFile()
 		
 		self.textLog.insert(tk.END, "--------------------\n")	
+		
+		self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='red')
 
 
-	"""To process incoming info (GPS)"""
-	def processIncomingInfo(self):
-		while self.queue.gsize():
+	"""To process incoming info"""
+	def processIncomingInfo(self):	
+	
+		# first we check for status
+		if self.isThereGps is True:			
+			self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='green')
+		else:
+			self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='red')
+		
+		if self.isThereRfidReader is True:			
+			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='green')
+		else:
+			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='red')
+					
+		# then we check for new data in the queue
+		while self.queue.qsize():
 			try: 
-				msg.self.queue.get(0)
+				msg=self.queue.get(0)
 				#Here we do something with the queued value
+				
+				self.isThereGps=True
 			
 				self.textLog.insert(tk.END, msg + '\n')
 				self.textLog.yview(tk.END)  #to keep the last text always visible
 		
-			except Queue.Empty:
+			except queue.Empty:
+				#self.textLog.insert(tk.END, 'empty queue' + '\n')
+				#self.textLog.yview(tk.END)  #to keep the last text always visible
 				pass
+
+
 
 	def createConfigureWindow(self):
 		topWindow=tk.Toplevel()
@@ -612,7 +623,8 @@ class myTkinterApp():
 
 
 	def storePointInDb(self, p):
-	
+
+		
 		# first we try to connect
 		try:
 			conn=psycopg2.connect("dbname='slope_db' user='postgres' host='localhost' password='p@ssw0rd'")
@@ -1216,29 +1228,61 @@ class myTkinterApp():
 		self.tDescription.delete("1.0", tk.END)
 		self.tDescription.insert(tk.END, "Same as SCHEDULEOPT")
 		self.e30.focus()
-						
-	
-	# método que siempre estará en marcha y actualizando el objeto miGps
-def metodoGpsParaThread():
-	the_connection=gps3.GPSDSocket()
-	the_fix=gps3.Fix()
 
-	while 1:
-		time.sleep(4)
-		try:
-			#print('antes esperar'.encode('utf-8').decode('utf-8')) 
-				
-			for new_data in the_connection:
+
+class ThreadedClient():
+	# This class fills the received tkinter window 
+	
+	def __init__(self, master):
+		
+		# we are in te main (original thread of the application
+		# we spawn a new thread for the asyncronous worker
+		
+		self.master=master
+		
+		#create the queue
+		self.queue =queue.Queue()
+		
+		#set up the Graphic User Interface
+		self.gui = guiPart(master, self.queue)
+		
+		#set up the thread to do asyncronous I/O
+		self.thread1=threading.Thread(target=self.workerGps)
+		self.thread1.start()
+		
+		# starts periodic Call to check for new info in the queue
+		self.periodicCall()
+
+		
+	def periodicCall(self):
+		"""
+		checks if there is something new in the queue
+		"""		
+		self.gui.processIncomingInfo()
+		
+		self.master.after(500, self.periodicCall)
 			
+				
+	def workerGps(self):
+		
+		the_connection=gps3.GPSDSocket()
+		the_fix=gps3.Fix()
+
+		try:				
+			for new_data in the_connection:
+				#time.sleep(0.5)
 				if new_data:
 					the_fix.refresh(new_data) 
 						
 				if not isinstance(the_fix.TPV['speed'],str):
-					miGpsLastData.lastSpeed = the_fix.TPV['speed']
-					miGpsLastData.lastLatitude=the_fix.TPV['lat']
-					miGpsLastData.lastLongitude=the_fix.TPV['lon']
-					miGpsLastData.lastAltitude=the_fix.TPV['alt']
-					miGpsLastData.lastTime=the_fix.TPV['time']				
+					lastSpeed = the_fix.TPV['speed']
+					lastLatitude=the_fix.TPV['lat']
+					lastLongitude=the_fix.TPV['lon']
+					lastAltitude=the_fix.TPV['alt']
+					lastTime=the_fix.TPV['time']
+									
+					msg=str(lastTime)+str(lastLatitude)
+					self.queue.put(msg)
 					
 					if isinstance(the_fix.TPV['track'], str):  # 'track' frequently is missing and returns as 'n/a'
 						heading = the_fix.TPV['track']
@@ -1246,21 +1290,25 @@ def metodoGpsParaThread():
 						heading = round(the_fix.TPV['track'])  # and heading percision in hundreths is just clutter.
 				else:
 					pass
+					
 
 		except:
 			pass
-			#print('exception'.encode('utf-8').decode('utf-8'))  
-	
+		
 	
 #main loop 
 # if __name__  works ok in a direct execution. However, if the file is executed from another module, it is not executed
 # that allows the other module to use de defined functions in this file without problems 
 if __name__== '__main__':
 	
-	miGpsLastData = gpsLastData()
+	# This creates a toplevel widget of Tk, usually the main application window
+	root=tk.Tk()
 	
-	t=threading.Thread(target=metodoGpsParaThread)
-	t.start()
-		
-	myapp=myTkinterApp()
+	#this fills the toplevel window
+	client = ThreadedClient(root)
+	
+	# finally this launches the top level window. Execution line stops here	
+	root.mainloop() 
+	
+
 	
