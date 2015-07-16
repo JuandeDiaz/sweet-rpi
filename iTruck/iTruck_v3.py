@@ -7,16 +7,18 @@
 # NOTE: if we do not use self, variables are ceated locally and cannot be shared between methods
 
 # imports
-import tkinter as tk
-import xml.etree.ElementTree as ET
-import socket
-import datetime
-import psycopg2					#for postgress connection
-import threading 
+import tkinter as tk				# main library to develop the gui
+import xml.etree.ElementTree as ET	# to work with xml files / structures
+import socket						# to use sockets to connect to the RFID reader
+import datetime						# to work with dates
+import psycopg2						# to create a postgress connection
+import threading 					# to allow threads
 import os
-import gps3
+import gps3							# to work with GPS module
 import time
-import queue
+import queue						# to allow queues, used to communicate between threads
+from PIL import Image, ImageTk		# to use images in the gui
+import requests						# to communicate via http with SLOPE MHG platform
 
 """structure for database tables"""
 class databaseEntry:
@@ -53,30 +55,40 @@ class gpsPoint:
 """main class to create the UI"""
 class Gui():	
 	
-
 	
 	"""Variables definition"""	
 	
 	#Status variables
 	isThereGps = False
 	isThereGprs = False
-	isThereRfidReader =False	
+	isThereRfidReader =False
+	isTruckOn =True	
+	
+	TIME_NEXT_MEASUREMENT=datetime.datetime.now()
 	
 	commandList=['']
 	numCommands=[0, 0]			#[total commands, next command to be processed]
 	
 	#create the queue
-	myQueue =queue.Queue()
-	
+	myGpsQueue =queue.Queue()
+	myRfidQueue =queue.Queue()
+		
 	#create the Gps point to store last position
 	myLastGpsPoint=gpsPoint()
 	
 		
 	#RFID Reader Variables
-	TCP_IP_RFID_READER='192.168.0.222' #ATENCION: Cambiar la IP desde la pantalla conguración
+	TCP_IP_RFID_READER='0.0.0.0' #ATTENTION: Change IP from the configuration window
 	TCP_PORT_RFID_READER=2189
 	BUFFER_SIZE_RFID_READER=512	
+	FREQ_READ_RFID = 60
+	FREQ_ACCESS_PLATF = 600
 	
+	#Other Variables
+	TRUCK_ID = '000'
+	COMMENTS = 'default comment'
+		
+	#Reader Attributes
 	ATTRIB_ANTS='1,2,3,4'		# 'ATTRIB ANTS=1,2,3,4\n' defines de sequence of antennas when reading
 	ATTRIB_TAGTYPE='EPCC1G2'	# 'ATTRIB TAGTYPE=EPCC1G2\n' defines the tag to be read
 	ATTRIB_FIELDSTRENGTH='29DB,29DB,29DB,29DB'	# 'ATTRIB FIELDSTRENGTH=29DB,29DB,29DB,29DB\n' define the RF power for each antenna
@@ -112,106 +124,120 @@ class Gui():
 		
 		self.root = master
 		
-		# loading the main gui widgets: buttons, texts, textlog
+		# loading the main gui widgets: buttons, texts, testLog
 		self.loadMainGui()
 		
 		# Loading xml config file, updating internal variables
 		self.loadXmlFile()		
 		
-		#initializing steps: check for GPS, GPRS and RFID reader and update color circles	
-		self.initializing()	
-		
 		# Starts periodic method 
 		self.root.after(500, self.updateMe)
 	
 		
-	""" loading the main gui widgets: buttons, texts, textlog """
+	""" loading the main gui widgets: buttons, texts, testLog """
 	def loadMainGui(self):
 	
 		#main window 
-		self.root.wm_title('iTruck')	#title of the main window 
+		self.root.wm_title('iTruck Main Window')	#title of the main window 
 		
-		#Left frame and its contents
+		#topFrame
+		topFrame=tk.Frame(self.root)		
+		topFrame.grid(row=0, column=0, padx=10, pady=2)	
+		
+		imageLogoUe=Image.open("img/logo_ue.jpg")
+		imageLogoUe=imageLogoUe.resize((83, 50), Image.ANTIALIAS)
+		imgLogoUe=ImageTk.PhotoImage(imageLogoUe)		
+			
+		lblLogoUe=tk.Label(topFrame, image=imgLogoUe)
+		lblLogoUe.image=imgLogoUe
+		lblLogoUe.grid(row=0, column=0, padx=10, pady=10)
+
+		imageLogoSlope=Image.open("img/logo_slope.png")
+		imageLogoSlope=imageLogoSlope.resize((62, 50))
+		imgLogoSlope=ImageTk.PhotoImage(imageLogoSlope)		
+			
+		lblLogoUe=tk.Label(topFrame, image=imgLogoSlope)
+		lblLogoUe.image=imgLogoSlope
+		lblLogoUe.grid(row=0, column=1, padx=10, pady=10)
+		
+		#separator
+		sep1=tk.Frame(self.root, height=2, width=200, borderwidth=2, relief=tk.RAISED)		
+		sep1.grid(row=1, column=0, sticky=tk.W+tk.E, padx=10, pady=4)		
+			
+		#Left frame 
 		leftFrame=tk.Frame(self.root)
-		leftFrame.grid(row=0, column=0, padx=10, pady=2)
+		leftFrame.grid(row=2, column=0, padx=10, pady=2)
 		
 		#indicators Frame
 		indicatorsFrame=tk.Frame(leftFrame)
-		indicatorsFrame.grid(row=0, column=0) 
+		indicatorsFrame.grid(row=0, column=0, padx=0) 
+
+		imageLedRed=Image.open("img/led_red.png")
+		imageLedRed=imageLedRed.resize((20, 20))
+		self.imgLedRed=ImageTk.PhotoImage(imageLedRed)	
 		
-		lbl1=tk.Label(indicatorsFrame, text="RFID reader:").grid(row=0, column=0, padx=10, pady=2, sticky=tk.W)		
-		self.circleCanvasRFID=tk.Canvas(indicatorsFrame, width=20, height=20)
-		self.circleCanvasRFID.grid(row=0, column=1, padx=20, pady=2)
-					
-		lbl2=tk.Label(indicatorsFrame, text="GPS connection:").grid(row=1, column=0, padx=10, pady=2, sticky=tk.W)		
-		self.circleCanvasGPS=tk.Canvas(indicatorsFrame, width=20, height=20)
-		self.circleCanvasGPS.grid(row=1, column=1, padx=20, pady=2)	
+		imageLedGreen=Image.open("img/led_green.png")
+		imageLedGreen=imageLedGreen.resize((20, 20))
+		self.imgLedGreen=ImageTk.PhotoImage(imageLedGreen)	
+	
+		lbl1=tk.Label(indicatorsFrame, text="Running:").grid(row=0, column=0, padx=0, pady=2, sticky=tk.W)			
+		self.lblLedRunning=tk.Label(indicatorsFrame, image=self.imgLedRed)
+		self.lblLedRunning.image=self.imgLedRed
+		self.lblLedRunning.grid(row=0, column=1, padx=10, pady=2, sticky=tk.E)	
+
+		lbl2=tk.Label(indicatorsFrame, text="RFID reader:").grid(row=1, column=0, padx=0, pady=2, sticky=tk.W)				
+		self.lblLedRfid=tk.Label(indicatorsFrame, image=self.imgLedRed)
+		self.lblLedRfid.image=self.imgLedRed
+		self.lblLedRfid.grid(row=1, column=1, padx=10, pady=2)	
+						
+		lbl3=tk.Label(indicatorsFrame, text="GPS connection:").grid(row=2, column=0, padx=0, pady=2, sticky=tk.W)		
+		self.lblLedGps=tk.Label(indicatorsFrame, image=self.imgLedRed)
+		self.lblLedGps.image=self.imgLedRed
+		self.lblLedGps.grid(row=2, column=1, padx=10, pady=2)
 			
-		lbl3=tk.Label(indicatorsFrame, text="GPRS connection:").grid(row=2, column=0, padx=10, pady=2, sticky=tk.W)
-		self.circleCanvasGPRS=tk.Canvas(indicatorsFrame, width=20, height=20)
-		self.circleCanvasGPRS.grid(row=2, column=1, padx=20, pady=2)
-		
+		lbl4=tk.Label(indicatorsFrame, text="GPRS connection:").grid(row=3, column=0, padx=0, pady=2, sticky=tk.W)
+		self.lblLedGprs=tk.Label(indicatorsFrame, image=self.imgLedRed)
+		self.lblLedGprs.image=self.imgLedRed
+		self.lblLedGprs.grid(row=3, column=1, padx=10, pady=2)
+				
 		#separator
 		sep1=tk.Frame(leftFrame, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
 		sep1.grid(row=1, sticky=tk.W+tk.E, padx=10, pady=4)
-						
-		#testFrame
-		testFrame=tk.Frame(leftFrame)
-		testFrame.grid(row=2, column=0) 
 		
-		lbl5=tk.Label(testFrame, text="Testing RFID reader").grid(row=0, column=0, padx=10, pady=2, sticky=tk.W)
+		#action Frame		
+		actionFrame=tk.Frame(leftFrame)
+		actionFrame.grid(row=2, column=0, pady=10) 
 		
-		lbl6=tk.Label(testFrame, text="Enter BRI Command:").grid(row=1, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.eTestRfid=tk.Entry(testFrame)
-		self.eTestRfid.grid(row=1, column=1, padx=10, pady=2)				
-		btnSendTestCommand=tk.Button(testFrame, text='Send', command=self.btnSendTestCommand_click)
-		btnSendTestCommand.grid(row=1, column=2, padx=10, pady=2)		
+		self.imageStop=Image.open("img/stop.png")
+		self.imgStop=ImageTk.PhotoImage(self.imageStop)	
+		self.imagePlay=Image.open("img/play.png")
+		self.imgPlay=ImageTk.PhotoImage(self.imagePlay)			
+					
+		self.btnPlayStop=tk.Button(actionFrame, image=self.imgStop, command=self.btnPlayStop_click)
+		self.btnPlayStop.image=self.imgStop
+		self.btnPlayStop.grid(row=1, column=0, padx=10, pady=2)			
 
-		lbl7=tk.Label(testFrame, text="Load reader configuration:").grid(row=2, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
-		btnReadTestCommand=tk.Button(testFrame, text='Load', command=self.btnLoadTestCommand_click)
-		btnReadTestCommand.grid(row=2, column=2, padx=10, pady=2)	
+		imageTest=Image.open("img/aid-kit.png")
+		imgTest=ImageTk.PhotoImage(imageTest)				
+		btnTest=tk.Button(actionFrame, image=imgTest, command=self.createTestWindow)
+		btnTest.image=imgTest
+		btnTest.grid(row=1, column=1, padx=10, pady=2)			
+		
+		imageConfig=Image.open("img/wrench.png")
+		imgConfig=ImageTk.PhotoImage(imageConfig)				
+		btnConfig=tk.Button(actionFrame, image=imgConfig, command=self.createConfigureWindow)
+		btnConfig.image=imgConfig
+		btnConfig.grid(row=1, column=2, padx=10, pady=2)	
 
-		lbl8=tk.Label(testFrame, text="Read tags:").grid(row=3, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
-		btnReadTestCommand=tk.Button(testFrame, text='Read', command=self.btnReadTestCommand_click)
-		btnReadTestCommand.grid(row=3, column=2, padx=10, pady=2)	
-
-		lbl9=tk.Label(testFrame, text="Write data in EPC format:").grid(row=4, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.eTagData=tk.Entry(testFrame)
-		self.eTagData.grid(row=4, column=1, padx=10, pady=2)
-		self.eTagData.delete(0, tk.END)
-		self.eTagData.insert(0, "H000011112222AAAA")	#data format for EPC tags			
-		btnWriteTestCommand=tk.Button(testFrame, text='Write', command=self.btnWriteTestCommand_click)
-		btnWriteTestCommand.grid(row=4, column=2, padx=10, pady=2)
-
-		lbl10=tk.Label(testFrame, text="Read and store tag in DB").grid(row=5, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
-		btnStoreInDb=tk.Button(testFrame, text='Store', command=self.btnStoreInDb_click)
-		btnStoreInDb.grid(row=5, column=2, padx=10, pady=2)	
-		
-		lbl11=tk.Label(testFrame, text="Read GPS Data").grid(row=6, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
-		btnReadGpsData=tk.Button(testFrame, text='Read GPS', command=self.btnReadGpsData_click)
-		btnReadGpsData.grid(row=6, column=2, padx=10, pady=2)	
-
-		#separator
-		sep2=tk.Frame(leftFrame, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
-		sep2.grid(row=3, sticky=tk.W+tk.E, padx=10, pady=4)
-		
-		
-		#controlFrame
-		controlsFrame=tk.Frame(leftFrame)
-		controlsFrame.grid(row=4, column=0) 
-				
-		cfgButton=tk.Button(controlsFrame, text='Configure', width=10, command=self.createConfigureWindow)
-		cfgButton.grid(row=1, column=0, padx=10, pady=2)
-		
-		saveLogButton=tk.Button(controlsFrame, text='Save Log', width=10, command=self.saveLogButton_click)
-		saveLogButton.grid(row=1, column=1, padx=10, pady=2)		
-		
-		exitBtn=tk.Button(controlsFrame, text='Exit', width=10, command=self.exitBtn_click)
-		exitBtn.grid(row=1, column=2, padx=10, pady=2)
+		imageExit=Image.open("img/exit.png")
+		imgExit=ImageTk.PhotoImage(imageExit)				
+		btnExit=tk.Button(actionFrame, image=imgExit, command=self.exitBtn_click)
+		btnExit.image=imgExit
+		btnExit.grid(row=1, column=3, padx=10, pady=2)	
 		
 		# Right Frame and its contents
 		rightFrame=tk.Frame(self.root, width=200, height=600)
-		rightFrame.grid(row=0, column=1, padx=10, pady=2)
+		rightFrame.grid(row=0, column=1, rowspan=4, padx=10, pady=10)
 		
 		statusFrame=tk.Frame(rightFrame, width=200, height=200)
 		statusFrame.grid(row=0, column=0, padx=10, pady=2)
@@ -219,16 +245,16 @@ class Gui():
 		scrollbar=tk.Scrollbar(statusFrame)
 		scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-		#textLog
-		self.textLog = tk.Text(statusFrame, wrap=tk.WORD, yscrollcommand=scrollbar.set, width=40, height=11)
-		self.textLog.insert(tk.END, "Welcome to the iTruck app\n")	
-		self.textLog.insert(tk.END, "SLOPE Project \n")	
-		self.textLog.insert(tk.END, "Version v1 \n")	
-		self.textLog.insert(tk.END, "--------------------\n")	
+		#testLog
+		self.mainLog = tk.Text(statusFrame, wrap=tk.WORD, yscrollcommand=scrollbar.set, width=40, height=16)
+		self.mainLog.insert(tk.END, "Welcome to the iTruck app\n")	
+		self.mainLog.insert(tk.END, "SLOPE Project \n")	
+		self.mainLog.insert(tk.END, "Version v1 \n")	
+		self.mainLog.insert(tk.END, "--------------------\n")	
 		currentTime = str(datetime.datetime.now().strftime('%x %X'))
-		self.textLog.insert(tk.END, "Current date: "+currentTime+"\n")
-		self.textLog.pack()
-		scrollbar.config(command=self.textLog.yview)
+		self.mainLog.insert(tk.END, "Current date: "+currentTime+"\n")
+		self.mainLog.pack()
+		scrollbar.config(command=self.mainLog.yview)
 	
 		
 	"""updates internal variables with values stored in XML file """
@@ -238,11 +264,11 @@ class Gui():
 		try:
 			tree=ET.parse('config.xml')
 			XMLroot=tree.getroot()
-			self.textLog.insert(tk.END, "Config file found\n")	
+			self.mainLog.insert(tk.END, "Config file found\n")	
 		except:	
-			self.textLog.insert(tk.END, "Config file not found\n")
+			self.mainLog.insert(tk.END, "Config file not found\n")
 
-		#TCP Congiguration Info		
+		#Main Congiguration Info		
 		if not XMLroot[0][0].text:		#empty trings give error, so we identify first if the string is empty
 			self.TCP_IP_RFID_READER=''
 		else:	
@@ -257,6 +283,26 @@ class Gui():
 			self.BUFFER_SIZE_RFID_READER=0
 		else:	
 			self.BUFFER_SIZE_RFID_READER=int(XMLroot[0][2].text)	#if it is not empty		
+
+		if not XMLroot[0][3].text:		#empty trings give error, so we identify first if the string is empty
+			self.FREQ_READ_RFID=0
+		else:	
+			self.FREQ_READ_RFID=int(XMLroot[0][3].text)	#if it is not empty	
+		
+		if not XMLroot[0][4].text:		#empty trings give error, so we identify first if the string is empty
+			self.FREQ_ACCESS_PLATF=0
+		else:	
+			self.FREQ_ACCESS_PLATF=int(XMLroot[0][4].text)	#if it is not empty	
+
+		if not XMLroot[0][5].text:		#empty trings give error, so we identify first if the string is empty
+			self.TRUCK_ID=0
+		else:	
+			self.TRUCK_ID=int(XMLroot[0][5].text)	#if it is not empty	
+
+		if not XMLroot[0][6].text:		#empty trings give error, so we identify first if the string is empty
+			self.COMMENTS=0
+		else:	
+			self.COMMENTS=XMLroot[0][6].text	#if it is not empty	
 
 		#RFID Congiguration Info - BRI Commands
 		if not XMLroot[1][0].text:		#empty trings give error, so we identify first if the string is empty
@@ -394,347 +440,569 @@ class Gui():
 		else:	
 			self.ATTRIB_SCHEDOPT=XMLroot[1][26].text	#if it is not empty	
 		
-		self.textLog.insert(tk.END, "Xml file loaded successfully\n")
-		self.textLog.insert(tk.END, "--------------------\n")
-		self.textLog.yview(tk.END)  #to keep the last text always visible
+		self.mainLog.insert(tk.END, "Xml file loaded successfully\n")
+		self.mainLog.insert(tk.END, "--------------------\n")
+		self.mainLog.yview(tk.END)  #to keep the last text always visible
 			
-	
-	"""check for GPS, GPRS and RFID reader and update color circles"""
-	def initializing(self):
 		
-	
-		#This updates the reader status
-		response= self.sendSingleBriCommand('ping\n')
-		self.textLog.insert(tk.END, 'IP RFID Reader:' + self.TCP_IP_RFID_READER + '\n')		
-		newResponse=response[0:2] #Here we remove all answered text except from where OK is placed
-		
-		if newResponse =="OK":	 #to change from byte to utf-8		
-			self.isThereRfidReader = True
-		else:
-			self.isThereRfidReader = False		
-		
-	
-		
-		self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='red')
-
 
 	"""Updates main Window periodically: GPS, GPRS, RFID Reader Status, Queue data"""
 	def updateMe(self):	
 	
+		#first we updated the RFID status
+		
+		self.isThereRfidReader =Worker2.isThereReader
 	
-		# first we check for status				
-		if self.isThereGps is True:			
-			self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='green')
+		self.isThereGprs =Worker3.isThereGprs	
+	
+	
+	
+		# first we update the LEDs	
+		if self.isTruckOn is True:			
+			self.lblLedRunning.config(image=self.imgLedGreen)		
+			self.btnPlayStop.config(image=self.imgStop)
 		else:
-			self.circleCanvasGPS.create_oval(0,0,20,20, width=0, fill='red')
+			self.lblLedRunning.config(image=self.imgLedRed)			
+			self.btnPlayStop.config(image=self.imgPlay)
 
 		if self.isThereRfidReader is True:			
-			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='green')
+			self.lblLedRfid.config(image=self.imgLedGreen)	
 		else:
-			self.circleCanvasRFID.create_oval(0,0,20,20, width=0, fill='red')
-		
-					
-		# then we check for new data in the queue
-		while self.myQueue.qsize():
+			self.lblLedRfid.config(image=self.imgLedRed)	
+									
+		if self.isThereGps is True:			
+			self.lblLedGps.config(image=self.imgLedGreen)
+		else:
+			self.lblLedGps.config(image=self.imgLedRed)
+			
+		if self.isThereGprs is True:			
+			self.lblLedGprs.config(image=self.imgLedGreen)
+		else:
+			self.lblLedGprs.config(image=self.imgLedRed)
+							
+		# then we check for new data in the GPS queue
+		while self.myGpsQueue.qsize():
 			try: 
-				newPoint=self.myQueue.get(0)
+				newPoint=self.myGpsQueue.get(0)
 				#Here we do something with the queued value
 				
 				self.myLastGpsPoint=newPoint
 				
 				self.isThereGps=True
 			
-				#self.textLog.insert(tk.END, 'Time: ' + str(self.myLastGpsPoint.Time) + '\n')
-				#self.textLog.insert(tk.END, 'Latitude: ' + str(self.myLastGpsPoint.Latitude) + '\n')
-				#self.textLog.yview(tk.END)  #to keep the last text always visible
+				#self.mainLog.insert(tk.END, 'Time: ' + str(self.myLastGpsPoint.Time) + '\n')
+				#self.mainLog.insert(tk.END, 'Latitude: ' + str(self.myLastGpsPoint.Latitude) + '\n')
+				#self.mainLog.yview(tk.END)  #to keep the last text always visible
 		
-			except myQueue.Empty:
-				#self.textLog.insert(tk.END, 'empty queue' + '\n')
-				#self.textLog.yview(tk.END)  #to keep the last text always visible
+			except self.myGpsQueue.Empty:
+				#self.mainLog.insert(tk.END, 'empty queue' + '\n')
+				#self.mainLog.yview(tk.END)  #to keep the last text always visible
 				pass
 		
+		
+		#now we check for new data in the RFID queue 
+		listPoints=[]
+			
+		while self.myRfidQueue.qsize():
+	
+			try:			
+				#we create a point
+				p = databaseEntry()			
+				p.EPCData=self.myRfidQueue.get(0)
+				p.latitude = self.myLastGpsPoint.Latitude
+				p.longitude=self.myLastGpsPoint.Longitude
+				p.altitude=self.myLastGpsPoint.Altitude
+				p.time=self.myLastGpsPoint.Time
+				p.speed=self.myLastGpsPoint.Speed
+				p.truckId=self.TRUCK_ID
+				p.comments=self.COMMENTS				
+				
+				#we add it to the list	of points
+				listPoints.append(p)
+									
+			except self.myRfidQueue.Empty:
+				pass
+
+			
+		if len(listPoints) >0:		
+			self.mainLog.insert(tk.END, str(len(listPoints)) + ' points stored in the DB\n')
+			self.mainLog.yview(tk.END)  #to keep the last text always visible				
+		
+		# For the number of points in the list, do:
+		for i in range(len(listPoints)):
+			p=listPoints.pop()
+						
+			if self.isThereGps:
+				self.storePointInDb(p)
+					
 		#finally the task launches again itself after some time
 		self.root.after(500, self.updateMe)
 
 
+	"""Toogles running or stopped state"""
+	def btnPlayStop_click(self):
+		if self.isTruckOn is True:
+			self.isTruckOn= False
+			
+			#then we update the Rfid worker values
+			Worker2.updateValues(self.myRfidQueue, self.isTruckOn, self.FREQ_READ_RFID, self.TCP_IP_RFID_READER, self.TCP_PORT_RFID_READER, self.BUFFER_SIZE_RFID_READER)
+
+		else:
+			self.isTruckOn= True	
+			
+			#then we update the Rfid worker values
+			Worker2.updateValues(self.myRfidQueue, self.isTruckOn, self.FREQ_READ_RFID, self.TCP_IP_RFID_READER, self.TCP_PORT_RFID_READER, self.BUFFER_SIZE_RFID_READER)
+		
+
+	"""launches a new window to test different elements"""
+	def createTestWindow(self):
+		
+		#testFrame---MAIN FRAME
+		testWindow=tk.Toplevel()
+		testWindow.wm_title("Test Window") 
+				
+		#test Left Frame----MAIN LEFT FRAME
+		testLeftFrame=tk.Frame(testWindow, width=200, height=200)
+		testLeftFrame.grid(row=0, column=0, padx=10, pady=2)
+				
+		
+		#top Left Frame
+		topLeftFrame=tk.Frame(testLeftFrame)		
+		topLeftFrame.grid(row=0, column=0, padx=0, pady=2)					
+		
+		lbl5=tk.Label(topLeftFrame, text="Testing RFID reader").grid(row=0, column=0, padx=10, pady=2, sticky=tk.W)
+		
+		lbl6=tk.Label(topLeftFrame, text="Enter BRI Command:").grid(row=1, column=0, padx=10, pady=2, sticky=tk.W)				
+		self.eTestRfid=tk.Entry(topLeftFrame)
+		self.eTestRfid.grid(row=1, column=1, padx=10, pady=2)				
+		btnSendTestCommand=tk.Button(topLeftFrame, text='Send', width=8, command=self.btnSendTestCommand_click)
+		btnSendTestCommand.grid(row=1, column=2, padx=10, pady=2)		
+
+		lbl7=tk.Label(topLeftFrame, text="Load reader configuration:").grid(row=2, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
+		btnReadTestCommand=tk.Button(topLeftFrame, text='Load', width=8, command=self.btnLoadTestCommand_click)
+		btnReadTestCommand.grid(row=2, column=2, padx=10, pady=2)	
+
+		lbl8=tk.Label(topLeftFrame, text="Read tags, RSSI, ANT:").grid(row=3, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
+		btnReadTestCommand=tk.Button(topLeftFrame, text='Read', width=8, command=self.btnReadTestCommand_click)
+		btnReadTestCommand.grid(row=3, column=2, padx=10, pady=2)	
+
+		lbl9=tk.Label(topLeftFrame, text="Write data in EPC format:").grid(row=4, column=0, padx=10, pady=2, sticky=tk.W)				
+		self.eTagData=tk.Entry(topLeftFrame)
+		self.eTagData.grid(row=4, column=1, padx=10, pady=2)
+		self.eTagData.delete(0, tk.END)
+		self.eTagData.insert(0, "H000011112222AAAA")	#data format for EPC tags			
+		btnWriteTestCommand=tk.Button(topLeftFrame, text='Write', width=8, command=self.btnWriteTestCommand_click)
+		btnWriteTestCommand.grid(row=4, column=2, padx=10, pady=2)
+
+		lbl10=tk.Label(topLeftFrame, text="Reset RFID module:").grid(row=5, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
+		btnResetTestCommand=tk.Button(topLeftFrame, text='Reset', width=8, command=self.btnResetTestCommand_click)
+		btnResetTestCommand.grid(row=5, column=2, padx=10, pady=2)	
+
+
+		lbl11=tk.Label(topLeftFrame, text="Read and store tag in DB").grid(row=6, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
+		btnStoreInDb=tk.Button(topLeftFrame, text='Store', width=8, command=self.btnStoreInDb_click)
+		btnStoreInDb.grid(row=6, column=2, padx=10, pady=2)	
+		
+		lbl12=tk.Label(topLeftFrame, text="Read GPS Data").grid(row=7, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
+		btnReadGpsData=tk.Button(topLeftFrame, text='Read GPS', width=8, command=self.btnReadGpsData_click)
+		btnReadGpsData.grid(row=7, column=2, padx=10, pady=2)	
+		
+		lbl13=tk.Label(topLeftFrame, text="Try GPRS Connection").grid(row=8, column=0, columnspan=2, padx=10, pady=2, sticky=tk.W)							
+		btnTestGprs=tk.Button(topLeftFrame, text='Test Gprs', width=8, command=self.btnTestGprs_click)
+		btnTestGprs.grid(row=8, column=2, padx=10, pady=2)	
+
+		#separator
+		sep2=tk.Frame(testLeftFrame, height=2,  borderwidth=2, relief=tk.RAISED)		
+		sep2.grid(row=1, column=0, sticky=tk.W+tk.E, padx=10, pady=4)
+				
+		#bottom Left Frame
+		bottomLeftFrame=tk.Frame(testLeftFrame)
+		bottomLeftFrame.grid(row=2, column=0) 
+		
+		imageLogoUe=Image.open("img/logo_ue.jpg")
+		imageLogoUe=imageLogoUe.resize((58, 35), Image.ANTIALIAS)
+		imgLogoUe=ImageTk.PhotoImage(imageLogoUe)		
+			
+		lblLogoUe=tk.Label(bottomLeftFrame, image=imgLogoUe)
+		lblLogoUe.image=imgLogoUe
+		lblLogoUe.grid(row=0, column=0, padx=10, pady=10)
+
+		imageLogoSlope=Image.open("img/logo_slope.png")
+		imageLogoSlope=imageLogoSlope.resize((43, 35))
+		imgLogoSlope=ImageTk.PhotoImage(imageLogoSlope)		
+			
+		lblLogoUe=tk.Label(bottomLeftFrame, image=imgLogoSlope)
+		lblLogoUe.image=imgLogoSlope
+		lblLogoUe.grid(row=0, column=1, padx=10, pady=10)			
+
+		saveLogButton=tk.Button(bottomLeftFrame, text='Save Log', width=8, height=2, command=self.saveLogButton_click)
+		saveLogButton.grid(row=0, column=2, padx=10, pady=2)	
+				
+		imageExit=Image.open("img/exit.png")
+		imgExit=ImageTk.PhotoImage(imageExit)
+						
+		btnExit=tk.Button(bottomLeftFrame, image=imgExit, command=testWindow.destroy)
+		btnExit.image=imgExit
+		btnExit.grid(row=0, column=3, padx=10, pady=2)	
+		
+		#test Right Frame
+		testRightFrame=tk.Frame(testWindow, width=200, height=200)
+		testRightFrame.grid(row=0, column=1, padx=10, pady=2)	
+		
+		testScrollbar=tk.Scrollbar(testRightFrame)
+		testScrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+		
+		#mainLog
+		self.testLog = tk.Text(testRightFrame, wrap=tk.WORD, yscrollcommand=testScrollbar.set, width=40, height=16)
+		self.testLog.insert(tk.END, "Welcome to the iTruck app\n")	
+		self.testLog.insert(tk.END, "SLOPE Project \n")	
+		self.testLog.insert(tk.END, "Version v1 \n")	
+		self.testLog.insert(tk.END, "--------------------\n")	
+		currentTime = str(datetime.datetime.now().strftime('%x %X'))
+		self.testLog.insert(tk.END, "Current date: "+currentTime+"\n")
+		self.testLog.pack()
+		testScrollbar.config(command=self.testLog.yview)
+
+
 	"""launches a new window to configure the RFID reader"""
 	def createConfigureWindow(self):
+				
+		configWindow=tk.Toplevel()
+		configWindow.wm_title("Configuration")	
 		
 		
-		topWindow=tk.Toplevel()
-		topWindow.wm_title("Configuration")		
-		
-		lbl0=tk.Label(topWindow, text="TCP Reader Configuration").grid(row=0, column=0, padx=10, pady=2)				
+		lbl0=tk.Label(configWindow, text="Configuration").grid(row=0, column=0, padx=10, pady=1)				
 
-		lbl1=tk.Label(topWindow, text="RFID Reader IP:").grid(row=1, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e1=tk.Entry(topWindow)
-		self.e1.grid(row=1, column=1, padx=10, pady=2)
+		separator=tk.Frame(configWindow, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
+		separator.grid(row=0, column=1, columnspan=5, sticky=tk.W+tk.E, padx=10, pady=1)				
+
+
+		lbl1=tk.Label(configWindow, text="RFID Reader IP:").grid(row=1, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e1=tk.Entry(configWindow)
+		self.e1.grid(row=1, column=1, padx=10, pady=1)
 		self.e1.delete(0,tk.END)
 		self.e1.insert(0,self.TCP_IP_RFID_READER)
-		lbl2=tk.Label(topWindow, text="i.e. 192.168.0.20").grid(row=1, column=2, padx=10, pady=2, sticky=tk.W)				
+		lbl2=tk.Label(configWindow, text="i.e. 192.168.0.20").grid(row=1, column=2, padx=10, pady=1, sticky=tk.W)				
 		
-		lbl3=tk.Label(topWindow, text="RFID Reader PORT:").grid(row=2, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e2=tk.Entry(topWindow)
-		self.e2.grid(row=2, column=1, padx=10, pady=2)
+		lbl3=tk.Label(configWindow, text="RFID Reader PORT:").grid(row=2, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e2=tk.Entry(configWindow)
+		self.e2.grid(row=2, column=1, padx=10, pady=1)
 		self.e2.delete(0,tk.END)
 		self.e2.insert(0,self.TCP_PORT_RFID_READER)
-		lbl4=tk.Label(topWindow, text="i.e. 2189").grid(row=2, column=2, padx=10, pady=2, sticky=tk.W)				
+		lbl4=tk.Label(configWindow, text="i.e. 2189").grid(row=2, column=2, padx=10, pady=1, sticky=tk.W)				
 		
-		lbl5=tk.Label(topWindow, text="TCP BUFFER:").grid(row=3, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e3=tk.Entry(topWindow)
-		self.e3.grid(row=3, column=1, padx=10, pady=2)
+		lbl5=tk.Label(configWindow, text="TCP BUFFER:").grid(row=3, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e3=tk.Entry(configWindow)
+		self.e3.grid(row=3, column=1, padx=10, pady=1)
 		self.e3.delete(0,tk.END)
 		self.e3.insert(0,self.BUFFER_SIZE_RFID_READER)					
-		lbl6=tk.Label(topWindow, text="i.e. 512").grid(row=3, column=2, padx=10, pady=2, sticky=tk.W)				
-			
-		separator1=tk.Frame(topWindow, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
-		separator1.grid(row=4, columnspan=6, sticky=tk.W+tk.E, padx=10, pady=2)				
+		lbl6=tk.Label(configWindow, text="i.e. 512").grid(row=3, column=2, padx=10, pady=1, sticky=tk.W)				
+
+		lbl=tk.Label(configWindow, text="Freq. reading RFID:").grid(row=4, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e50=tk.Entry(configWindow)
+		self.e50.grid(row=4, column=1, padx=10, pady=1)
+		self.e50.delete(0,tk.END)
+		self.e50.insert(0,self.FREQ_READ_RFID)
+		lbl=tk.Label(configWindow, text="60 (seconds)").grid(row=4, column=2, padx=10, pady=1, sticky=tk.W)				
 		
-		lbl7=tk.Label(topWindow, text="RFID reader configuration").grid(row=5, column=0, padx=10, pady=2)				
+		lbl=tk.Label(configWindow, text="Freq. accessing platform:").grid(row=1, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e51=tk.Entry(configWindow)
+		self.e51.grid(row=1, column=4, padx=10, pady=1)
+		self.e51.delete(0,tk.END)
+		self.e51.insert(0,self.FREQ_ACCESS_PLATF)		
+		lbl=tk.Label(configWindow, text="600 (sec)").grid(row=1, column=5, padx=10, pady=1, sticky=tk.W)				
+
+		lbl=tk.Label(configWindow, text="Truck Id:").grid(row=2, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e52=tk.Entry(configWindow)
+		self.e52.grid(row=2, column=4, padx=10, pady=1)
+		self.e52.delete(0,tk.END)
+		self.e52.insert(0,self.TRUCK_ID)		
+		lbl=tk.Label(configWindow, text="001 (num)").grid(row=2, column=5, padx=10, pady=1, sticky=tk.W)				
+
+		lbl=tk.Label(configWindow, text="Comments:").grid(row=3, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e53=tk.Entry(configWindow)
+		self.e53.grid(row=3, column=4, padx=10, pady=1)
+		self.e53.delete(0,tk.END)
+		self.e53.insert(0,self.COMMENTS)		
+		lbl=tk.Label(configWindow, text="Any Text").grid(row=3, column=5, padx=10, pady=1, sticky=tk.W)				
 		
-		lbl8=tk.Label(topWindow, text="ATTRIB ANTS:").grid(row=6, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e4=tk.Entry(topWindow)
-		self.e4.grid(row=6, column=1, padx=10, pady=2)
+		
+		lbl7=tk.Label(configWindow, text="RFID reader configuration").grid(row=6, column=0, padx=0, pady=1, sticky=tk.E)				
+
+		separator1=tk.Frame(configWindow, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
+		separator1.grid(row=6, column=1, columnspan=5, sticky=tk.W+tk.E, padx=10, pady=1)			
+
+		lbl8=tk.Label(configWindow, text="ATTRIB ANTS:").grid(row=7, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e4=tk.Entry(configWindow)
+		self.e4.grid(row=7, column=1, padx=10, pady=1)
 		self.e4.delete(0,tk.END)
 		self.e4.insert(0,self.ATTRIB_ANTS)					
-		cfgBtn1=tk.Button(topWindow, text='Info', command=self.cfgBtn1_click)
-		cfgBtn1.grid(row=6, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn1=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn1_click)
+		cfgBtn1.grid(row=7, column=2, padx=10, pady=1, sticky=tk.W)
 
-		lbl9=tk.Label(topWindow, text="ATTRIB TAGTYPE:").grid(row=6, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e5=tk.Entry(topWindow)
-		self.e5.grid(row=6, column=4, padx=10, pady=2)
+		lbl9=tk.Label(configWindow, text="ATTRIB TAGTYPE:").grid(row=7, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e5=tk.Entry(configWindow)
+		self.e5.grid(row=7, column=4, padx=10, pady=1)
 		self.e5.delete(0,tk.END)
 		self.e5.insert(0,self.ATTRIB_TAGTYPE)					
-		cfgBtn2=tk.Button(topWindow, text='Info', command=self.cfgBtn2_click)
-		cfgBtn2.grid(row=6, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn2=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn2_click)
+		cfgBtn2.grid(row=7, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl10=tk.Label(topWindow, text="ATTRIB FIELDSTRENGTH:").grid(row=7, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e6=tk.Entry(topWindow)
-		self.e6.grid(row=7, column=1, padx=10, pady=2)
+		lbl10=tk.Label(configWindow, text="ATTRIB FIELDSTRENGTH:").grid(row=8, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e6=tk.Entry(configWindow)
+		self.e6.grid(row=8, column=1, padx=10, pady=1)
 		self.e6.delete(0,tk.END)
 		self.e6.insert(0,self.ATTRIB_FIELDSTRENGTH)					
-		cfgBtn3=tk.Button(topWindow, text='Info', command=self.cfgBtn3_click)
-		cfgBtn3.grid(row=7, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn3=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn3_click)
+		cfgBtn3.grid(row=8, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl11=tk.Label(topWindow, text="ATTRIB RDTRIES:").grid(row=7, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e7=tk.Entry(topWindow)
-		self.e7.grid(row=7, column=4, padx=10, pady=2)
+		lbl11=tk.Label(configWindow, text="ATTRIB RDTRIES:").grid(row=8, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e7=tk.Entry(configWindow)
+		self.e7.grid(row=8, column=4, padx=10, pady=1)
 		self.e7.delete(0,tk.END)
 		self.e7.insert(0,self.ATTRIB_RDTRIES)					
-		cfgBtn4=tk.Button(topWindow, text='Info', command=self.cfgBtn4_click)
-		cfgBtn4.grid(row=7, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn4=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn4_click)
+		cfgBtn4.grid(row=8, column=5, padx=10, pady=1, sticky=tk.W)
 		
-		lbl12=tk.Label(topWindow, text="ATTRIB RPTTIMEOUT:").grid(row=8, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e8=tk.Entry(topWindow)
-		self.e8.grid(row=8, column=1, padx=10, pady=2)
+		lbl12=tk.Label(configWindow, text="ATTRIB RPTTIMEOUT:").grid(row=9, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e8=tk.Entry(configWindow)
+		self.e8.grid(row=9, column=1, padx=10, pady=1)
 		self.e8.delete(0,tk.END)
 		self.e8.insert(0,self.ATTRIB_RPTTIMEOUT)					
-		cfgBtn5=tk.Button(topWindow, text='Info', command=self.cfgBtn5_click)
-		cfgBtn5.grid(row=8, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn5=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn5_click)
+		cfgBtn5.grid(row=9, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl13=tk.Label(topWindow, text="ATTRIB IDTIMEOUT:").grid(row=8, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e9=tk.Entry(topWindow)
-		self.e9.grid(row=8, column=4, padx=10, pady=2)
+		lbl13=tk.Label(configWindow, text="ATTRIB IDTIMEOUT:").grid(row=9, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e9=tk.Entry(configWindow)
+		self.e9.grid(row=9, column=4, padx=10, pady=1)
 		self.e9.delete(0,tk.END)
 		self.e9.insert(0,self.ATTRIB_IDTIMEOUT)					
-		cfgBtn6=tk.Button(topWindow, text='Info', command=self.cfgBtn6_click)
-		cfgBtn6.grid(row=8, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn6=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn6_click)
+		cfgBtn6.grid(row=9, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl13=tk.Label(topWindow, text="ATTRIB ANTTIMEOUT:").grid(row=9, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e10=tk.Entry(topWindow)
-		self.e10.grid(row=9, column=1, padx=10, pady=2)
+		lbl13=tk.Label(configWindow, text="ATTRIB ANTTIMEOUT:").grid(row=10, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e10=tk.Entry(configWindow)
+		self.e10.grid(row=10, column=1, padx=10, pady=1)
 		self.e10.delete(0,tk.END)
 		self.e10.insert(0,self.ATTRIB_ANTTIMEOUT)					
-		cfgBtn7=tk.Button(topWindow, text='Info', command=self.cfgBtn7_click)
-		cfgBtn7.grid(row=9, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn7=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn7_click)
+		cfgBtn7.grid(row=10, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl14=tk.Label(topWindow, text="ATTRIB IDTRIES:").grid(row=9, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e11=tk.Entry(topWindow)
-		self.e11.grid(row=9, column=4, padx=10, pady=2)
+		lbl14=tk.Label(configWindow, text="ATTRIB IDTRIES:").grid(row=10, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e11=tk.Entry(configWindow)
+		self.e11.grid(row=10, column=4, padx=10, pady=1)
 		self.e11.delete(0,tk.END)
 		self.e11.insert(0,self.ATTRIB_IDTRIES)					
-		cfgBtn8=tk.Button(topWindow, text='Info', command=self.cfgBtn8_click)
-		cfgBtn8.grid(row=9, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn8=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn8_click)
+		cfgBtn8.grid(row=10, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl15=tk.Label(topWindow, text="ATTRIB ANTTRIES:").grid(row=10, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e12=tk.Entry(topWindow)
-		self.e12.grid(row=10, column=1, padx=10, pady=2)
+		lbl15=tk.Label(configWindow, text="ATTRIB ANTTRIES:").grid(row=11, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e12=tk.Entry(configWindow)
+		self.e12.grid(row=11, column=1, padx=10, pady=1)
 		self.e12.delete(0,tk.END)
 		self.e12.insert(0,self.ATTRIB_ANTTRIES)					
-		cfgBtn9=tk.Button(topWindow, text='Info', command=self.cfgBtn9_click)
-		cfgBtn9.grid(row=10, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn9=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn9_click)
+		cfgBtn9.grid(row=11, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl16=tk.Label(topWindow, text="ATTRIB WRTRIES:").grid(row=10, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e13=tk.Entry(topWindow)
-		self.e13.grid(row=10, column=4, padx=10, pady=2)
+		lbl16=tk.Label(configWindow, text="ATTRIB WRTRIES:").grid(row=11, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e13=tk.Entry(configWindow)
+		self.e13.grid(row=11, column=4, padx=10, pady=1)
 		self.e13.delete(0,tk.END)
 		self.e13.insert(0,self.ATTRIB_WRTRIES)					
-		cfgBtn10=tk.Button(topWindow, text='Info', command=self.cfgBtn10_click)
-		cfgBtn10.grid(row=10, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn10=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn10_click)
+		cfgBtn10.grid(row=11, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl17=tk.Label(topWindow, text="ATTRIB LOCKTRIES:").grid(row=11, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e14=tk.Entry(topWindow)
-		self.e14.grid(row=11, column=1, padx=10, pady=2)
+		lbl17=tk.Label(configWindow, text="ATTRIB LOCKTRIES:").grid(row=12, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e14=tk.Entry(configWindow)
+		self.e14.grid(row=12, column=1, padx=10, pady=1)
 		self.e14.delete(0,tk.END)
 		self.e14.insert(0,self.ATTRIB_LOCKTRIES)					
-		cfgBtn11=tk.Button(topWindow, text='Info', command=self.cfgBtn11_click)
-		cfgBtn11.grid(row=11, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn11=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn11_click)
+		cfgBtn11.grid(row=12, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl18=tk.Label(topWindow, text="ATTRIB SELTRIES:").grid(row=11, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e15=tk.Entry(topWindow)
-		self.e15.grid(row=11, column=4, padx=10, pady=2)
+		lbl18=tk.Label(configWindow, text="ATTRIB SELTRIES:").grid(row=12, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e15=tk.Entry(configWindow)
+		self.e15.grid(row=12, column=4, padx=10, pady=1)
 		self.e15.delete(0,tk.END)
 		self.e15.insert(0,self.ATTRIB_SELTRIES)					
-		cfgBtn12=tk.Button(topWindow, text='Info', command=self.cfgBtn12_click)
-		cfgBtn12.grid(row=11, column=5, padx=10, pady=2, sticky=tk.W)				
+		cfgBtn12=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn12_click)
+		cfgBtn12.grid(row=12, column=5, padx=10, pady=1, sticky=tk.W)				
 	
-		lbl19=tk.Label(topWindow, text="ATTRIB UNSELTRIES:").grid(row=12, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e16=tk.Entry(topWindow)
-		self.e16.grid(row=12, column=1, padx=10, pady=2)
+		lbl19=tk.Label(configWindow, text="ATTRIB UNSELTRIES:").grid(row=13, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e16=tk.Entry(configWindow)
+		self.e16.grid(row=13, column=1, padx=10, pady=1)
 		self.e16.delete(0,tk.END)
 		self.e16.insert(0,self.ATTRIB_UNSELTRIES)					
-		cfgBtn13=tk.Button(topWindow, text='Info', command=self.cfgBtn13_click)
-		cfgBtn13.grid(row=12, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn13=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn13_click)
+		cfgBtn13.grid(row=13, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl20=tk.Label(topWindow, text="ATTRIB INITTRIES:").grid(row=12, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e17=tk.Entry(topWindow)
-		self.e17.grid(row=12, column=4, padx=10, pady=2)
+		lbl20=tk.Label(configWindow, text="ATTRIB INITTRIES:").grid(row=13, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e17=tk.Entry(configWindow)
+		self.e17.grid(row=13, column=4, padx=10, pady=1)
 		self.e17.delete(0,tk.END)
 		self.e17.insert(0,self.ATTRIB_INITTRIES)					
-		cfgBtn14=tk.Button(topWindow, text='Info', command=self.cfgBtn14_click)
-		cfgBtn14.grid(row=12, column=5, padx=10, pady=2, sticky=tk.W)		
+		cfgBtn14=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn14_click)
+		cfgBtn14.grid(row=13, column=5, padx=10, pady=1, sticky=tk.W)		
 
-		lbl21=tk.Label(topWindow, text="ATTRIB INITIALQ:").grid(row=13, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e18=tk.Entry(topWindow)
-		self.e18.grid(row=13, column=1, padx=10, pady=2)
+		lbl21=tk.Label(configWindow, text="ATTRIB INITIALQ:").grid(row=14, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e18=tk.Entry(configWindow)
+		self.e18.grid(row=14, column=1, padx=10, pady=1)
 		self.e18.delete(0,tk.END)
 		self.e18.insert(0,self.ATTRIB_INITIALQ)					
-		cfgBtn15=tk.Button(topWindow, text='Info', command=self.cfgBtn15_click)
-		cfgBtn15.grid(row=13, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn15=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn15_click)
+		cfgBtn15.grid(row=14, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl22=tk.Label(topWindow, text="ATTRIB QUERYSEL:").grid(row=13, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e19=tk.Entry(topWindow)
-		self.e19.grid(row=13, column=4, padx=10, pady=2)
+		lbl22=tk.Label(configWindow, text="ATTRIB QUERYSEL:").grid(row=14, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e19=tk.Entry(configWindow)
+		self.e19.grid(row=14, column=4, padx=10, pady=1)
 		self.e19.delete(0,tk.END)
 		self.e19.insert(0,self.ATTRIB_QUERYSEL)					
-		cfgBtn16=tk.Button(topWindow, text='Info', command=self.cfgBtn16_click)
-		cfgBtn16.grid(row=13, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn16=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn16_click)
+		cfgBtn16.grid(row=14, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl23=tk.Label(topWindow, text="ATTRIB QUERYTARGET:").grid(row=14, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e20=tk.Entry(topWindow)
-		self.e20.grid(row=14, column=1, padx=10, pady=2)
+		lbl23=tk.Label(configWindow, text="ATTRIB QUERYTARGET:").grid(row=15, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e20=tk.Entry(configWindow)
+		self.e20.grid(row=15, column=1, padx=10, pady=1)
 		self.e20.delete(0,tk.END)
 		self.e20.insert(0,self.ATTRIB_QUERYTARGET)					
-		cfgBtn17=tk.Button(topWindow, text='Info', command=self.cfgBtn17_click)
-		cfgBtn17.grid(row=14, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn17=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn17_click)
+		cfgBtn17.grid(row=15, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl24=tk.Label(topWindow, text="ATTRIB SESSION:").grid(row=14, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e21=tk.Entry(topWindow)
-		self.e21.grid(row=14, column=4, padx=10, pady=2)
+		lbl24=tk.Label(configWindow, text="ATTRIB SESSION:").grid(row=15, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e21=tk.Entry(configWindow)
+		self.e21.grid(row=15, column=4, padx=10, pady=1)
 		self.e21.delete(0,tk.END)
 		self.e21.insert(0,self.ATTRIB_SESSION)					
-		cfgBtn18=tk.Button(topWindow, text='Info', command=self.cfgBtn18_click)
-		cfgBtn18.grid(row=14, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn18=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn18_click)
+		cfgBtn18.grid(row=15, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl25=tk.Label(topWindow, text="ATTRIB LBTCHANNEL:").grid(row=15, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e22=tk.Entry(topWindow)
-		self.e22.grid(row=15, column=1, padx=10, pady=2)
+		lbl25=tk.Label(configWindow, text="ATTRIB LBTCHANNEL:").grid(row=16, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e22=tk.Entry(configWindow)
+		self.e22.grid(row=16, column=1, padx=10, pady=1)
 		self.e22.delete(0,tk.END)
 		self.e22.insert(0,self.ATTRIB_LBTCHANNEL)					
-		cfgBtn19=tk.Button(topWindow, text='Info', command=self.cfgBtn19_click)
-		cfgBtn19.grid(row=15, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn19=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn19_click)
+		cfgBtn19.grid(row=16, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl26=tk.Label(topWindow, text="ATTRIB SCHEDULEOPT:").grid(row=15, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e23=tk.Entry(topWindow)
-		self.e23.grid(row=15, column=4, padx=10, pady=2)
+		lbl26=tk.Label(configWindow, text="ATTRIB SCHEDULEOPT:").grid(row=16, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e23=tk.Entry(configWindow)
+		self.e23.grid(row=16, column=4, padx=10, pady=1)
 		self.e23.delete(0,tk.END)
 		self.e23.insert(0,self.ATTRIB_SCHEDULEOPT)					
-		cfgBtn20=tk.Button(topWindow, text='Info', command=self.cfgBtn20_click)
-		cfgBtn20.grid(row=15, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn20=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn20_click)
+		cfgBtn20.grid(row=16, column=5, padx=10, pady=1, sticky=tk.W)
 		
-		lbl27=tk.Label(topWindow, text="ATTRIB FIELDSEP:").grid(row=16, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e24=tk.Entry(topWindow)
-		self.e24.grid(row=16, column=1, padx=10, pady=2)
+		lbl27=tk.Label(configWindow, text="ATTRIB FIELDSEP:").grid(row=17, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e24=tk.Entry(configWindow)
+		self.e24.grid(row=17, column=1, padx=10, pady=1)
 		self.e24.delete(0,tk.END)
 		self.e24.insert(0,self.ATTRIB_FIELDSEP)					
-		cfgBtn21=tk.Button(topWindow, text='Info', command=self.cfgBtn21_click)
-		cfgBtn21.grid(row=16, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn21=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn21_click)
+		cfgBtn21.grid(row=17, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl28=tk.Label(topWindow, text="ATTRIB BROADCASTSYNC:").grid(row=16, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e25=tk.Entry(topWindow)
-		self.e25.grid(row=16, column=4, padx=10, pady=2)
+		lbl28=tk.Label(configWindow, text="ATTRIB BROADCASTSYNC:").grid(row=17, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e25=tk.Entry(configWindow)
+		self.e25.grid(row=17, column=4, padx=10, pady=1)
 		self.e25.delete(0,tk.END)
 		self.e25.insert(0,self.ATTRIB_BROADCASTSYNC)					
-		cfgBtn22=tk.Button(topWindow, text='Info', command=self.cfgBtn22_click)
-		cfgBtn22.grid(row=16, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn22=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn22_click)
+		cfgBtn22.grid(row=17, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl29=tk.Label(topWindow, text="ATTRIB UTCTIME:").grid(row=17, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e26=tk.Entry(topWindow)
-		self.e26.grid(row=17, column=1, padx=10, pady=2)
+		lbl29=tk.Label(configWindow, text="ATTRIB UTCTIME:").grid(row=18, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e26=tk.Entry(configWindow)
+		self.e26.grid(row=18, column=1, padx=10, pady=1)
 		self.e26.delete(0,tk.END)
 		self.e26.insert(0,self.ATTRIB_UTCTIME)					
-		cfgBtn23=tk.Button(topWindow, text='Info', command=self.cfgBtn23_click)
-		cfgBtn23.grid(row=17, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn23=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn23_click)
+		cfgBtn23.grid(row=18, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl30=tk.Label(topWindow, text="ATTRIB TIMEOUTMODE:").grid(row=17, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e27=tk.Entry(topWindow)
-		self.e27.grid(row=17, column=4, padx=10, pady=2)
+		lbl30=tk.Label(configWindow, text="ATTRIB TIMEOUTMODE:").grid(row=18, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e27=tk.Entry(configWindow)
+		self.e27.grid(row=18, column=4, padx=10, pady=1)
 		self.e27.delete(0,tk.END)
 		self.e27.insert(0,self.ATTRIB_TIMEOUTMODE)					
-		cfgBtn24=tk.Button(topWindow, text='Info', command=self.cfgBtn24_click)
-		cfgBtn24.grid(row=17, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn24=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn24_click)
+		cfgBtn24.grid(row=18, column=5, padx=10, pady=1, sticky=tk.W)
 
-		lbl31=tk.Label(topWindow, text="ATTRIB NOTAGRPT:").grid(row=18, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e28=tk.Entry(topWindow)
-		self.e28.grid(row=18, column=1, padx=10, pady=2)
+		lbl31=tk.Label(configWindow, text="ATTRIB NOTAGRPT:").grid(row=19, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e28=tk.Entry(configWindow)
+		self.e28.grid(row=19, column=1, padx=10, pady=1)
 		self.e28.delete(0,tk.END)
 		self.e28.insert(0,self.ATTRIB_NOTAGRPT)					
-		cfgBtn25=tk.Button(topWindow, text='Info', command=self.cfgBtn25_click)
-		cfgBtn25.grid(row=18, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn25=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn25_click)
+		cfgBtn25.grid(row=19, column=2, padx=10, pady=1, sticky=tk.W)
 		
-		lbl32=tk.Label(topWindow, text="ATTRIB IDREPORT:").grid(row=18, column=3, padx=10, pady=2, sticky=tk.W)				
-		self.e29=tk.Entry(topWindow)
-		self.e29.grid(row=18, column=4, padx=10, pady=2)
+		lbl32=tk.Label(configWindow, text="ATTRIB IDREPORT:").grid(row=19, column=3, padx=10, pady=1, sticky=tk.W)				
+		self.e29=tk.Entry(configWindow)
+		self.e29.grid(row=19, column=4, padx=10, pady=1)
 		self.e29.delete(0,tk.END)
 		self.e29.insert(0,self.ATTRIB_IDREPORT)					
-		cfgBtn26=tk.Button(topWindow, text='Info', command=self.cfgBtn26_click)
-		cfgBtn26.grid(row=18, column=5, padx=10, pady=2, sticky=tk.W)
+		cfgBtn26=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn26_click)
+		cfgBtn26.grid(row=19, column=5, padx=10, pady=1, sticky=tk.W)
 		
-		lbl33=tk.Label(topWindow, text="ATTRIB SCHEDOPT:").grid(row=19, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.e30=tk.Entry(topWindow)
-		self.e30.grid(row=19, column=1, padx=10, pady=2)
+		lbl33=tk.Label(configWindow, text="ATTRIB SCHEDOPT:").grid(row=20, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.e30=tk.Entry(configWindow)
+		self.e30.grid(row=20, column=1, padx=10, pady=1)
 		self.e30.delete(0,tk.END)
 		self.e30.insert(0,self.ATTRIB_SCHEDOPT)					
-		cfgBtn27=tk.Button(topWindow, text='Info', command=self.cfgBtn27_click)
-		cfgBtn27.grid(row=19, column=2, padx=10, pady=2, sticky=tk.W)
+		cfgBtn27=tk.Button(configWindow, text='Info', pady=1, command=self.cfgBtn27_click)
+		cfgBtn27.grid(row=20, column=2, padx=10, pady=1, sticky=tk.W)
 	
-		lblExample=tk.Label(topWindow, text="Example:").grid(row=20, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.tExample = tk.Text(topWindow, wrap=tk.WORD, height=1)
-		self.tExample.grid(row=20, column=1, columnspan=5, padx=10, pady=2, sticky=tk.W+tk.E)
+		lblExample=tk.Label(configWindow, text="Example:").grid(row=21, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.tExample = tk.Text(configWindow, wrap=tk.WORD, height=1)
+		self.tExample.grid(row=21, column=1, columnspan=5, padx=10, pady=1, sticky=tk.W+tk.E)
 		
-		lblDescription=tk.Label(topWindow, text="Description:").grid(row=21, column=0, padx=10, pady=2, sticky=tk.W)				
-		self.tDescription = tk.Text(topWindow, wrap=tk.WORD, height=1)
-		self.tDescription.grid(row=21, column=1, columnspan=5, padx=10, pady=2, sticky=tk.W+tk.E)
+		lblDescription=tk.Label(configWindow, text="Description:").grid(row=22, column=0, padx=10, pady=1, sticky=tk.W)				
+		self.tDescription = tk.Text(configWindow, wrap=tk.WORD, height=1)
+		self.tDescription.grid(row=22, column=1, columnspan=5, padx=10, pady=1, sticky=tk.W+tk.E)
 
-		separator2=tk.Frame(topWindow, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
-		separator2.grid(row=22, columnspan=6, sticky=tk.W+tk.E, padx=10, pady=2)	
+		separator2=tk.Frame(configWindow, height=2, width=100, borderwidth=2, relief=tk.RAISED)		
+		separator2.grid(row=23, columnspan=6, sticky=tk.W+tk.E, padx=10, pady=1)	
 		
-		genXML=tk.Button(topWindow, text='Save XML', command=self.saveXmlFile)
-		genXML.grid(row=23, column=1, padx=10, pady=4, sticky=tk.W+tk.E)				
+		#bottom Frame
+		bottomFrame=tk.Frame(configWindow)
+		bottomFrame.grid(row=24, column=0, columnspan=6) 
+			
+		imageLogoUe=Image.open("img/logo_ue.jpg")
+		imageLogoUe=imageLogoUe.resize((58, 35), Image.ANTIALIAS)
+		imgLogoUe=ImageTk.PhotoImage(imageLogoUe)		
+			
+		lblLogoUe=tk.Label(bottomFrame, image=imgLogoUe)
+		lblLogoUe.image=imgLogoUe
+		lblLogoUe.grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
 
-		exitTopWindow=tk.Button(topWindow, text='Exit', command=topWindow.destroy)
-		exitTopWindow.grid(row=23, column=4, padx=10, pady=4, sticky=tk.W+tk.E)		
+		imageLogoSlope=Image.open("img/logo_slope.png")
+		imageLogoSlope=imageLogoSlope.resize((43, 35))
+		imgLogoSlope=ImageTk.PhotoImage(imageLogoSlope)		
+			
+		lblLogoUe=tk.Label(bottomFrame, image=imgLogoSlope)
+		lblLogoUe.image=imgLogoSlope
+		lblLogoUe.grid(row=0, column=1, padx=10, pady=10)			
+
+		imageSaveXml=Image.open("img/floppy-disk.png")
+		imgSaveXml=ImageTk.PhotoImage(imageSaveXml)		
+		
+		saveXmlButton=tk.Button(bottomFrame, image=imgSaveXml, command=self.saveXmlFile)
+		saveXmlButton.image=imgSaveXml
+		saveXmlButton.grid(row=0, column=2, padx=10, pady=2)	
+				
+		imageExit=Image.open("img/exit.png")
+		imgExit=ImageTk.PhotoImage(imageExit)
+						
+		btnExit=tk.Button(bottomFrame, image=imgExit, command=configWindow.destroy)
+		btnExit.image=imgExit
+		btnExit.grid(row=0, column=3, padx=10, pady=2)		
 	
 	
 	"""sends a single instruction to the RFID Reader"""		
 	def btnSendTestCommand_click(self):
 
 		command= self.eTestRfid.get()+'\n'
-		self.textLog.insert(tk.END, "sending command: " + command )			
+		self.testLog.insert(tk.END, "sending command: " + command )			
 		response = self.sendSingleBriCommand(command)
 		newResponse=response.replace('\r','')
-		self.textLog.insert(tk.END, newResponse)				
-		self.textLog.yview(tk.END)  #to keep the last text always visible
+		self.testLog.insert(tk.END, newResponse)				
+		self.testLog.yview(tk.END)  #to keep the last text always visible
 		
 
 	"""sends all configuration  instructions to the reader, and after it reads tags"""	
@@ -742,35 +1010,35 @@ class Gui():
 	
 		#here we create the desired list of commands
 		self.commandList =[
-		'VER\n',
-		'PING TIME\n',
-		'ATTRIB ANTS=' + self.ATTRIB_ANTS + '\n', 			
-		'ATTRIB TAGTYPE=' + self.ATTRIB_TAGTYPE + '\n', 
-		'ATTRIB FIELDSTRENGTH=' + self.ATTRIB_FIELDSTRENGTH + '\n', 
-		'ATTRIB RDTRIES=' + self.ATTRIB_RDTRIES + '\n', 		
-		'ATTRIB RPTTIMEOUT=' + self.ATTRIB_RPTTIMEOUT + '\n', 	
-		'ATTRIB IDTIMEOUT=' + self.ATTRIB_IDTIMEOUT + '\n', 	
-		'ATTRIB ANTTIMEOUT=' + self.ATTRIB_ANTTIMEOUT + '\n', 	
-		'ATTRIB IDTRIES=' + self.ATTRIB_IDTRIES + '\n', 		
-		'ATTRIB ANTTRIES=' + self.ATTRIB_ANTTRIES + '\n', 		
-		'ATTRIB WRTRIES=' + self.ATTRIB_WRTRIES + '\n', 		
-		'ATTRIB LOCKTRIES='+ self.ATTRIB_LOCKTRIES + '\n', 	
-		'ATTRIB SELTRIES=' + self.ATTRIB_SELTRIES + '\n', 		
-		'ATTRIB UNSELTRIES=' + self.ATTRIB_UNSELTRIES + '\n', 	
-		'ATTRIB INITTRIES=' + self.ATTRIB_INITTRIES + '\n', 	
-		'ATTRIB INITIALQ=' + self.ATTRIB_INITIALQ + '\n', 		
-		'ATTRIB QUERYSEL=' + self.ATTRIB_QUERYSEL + '\n', 		
-		'ATTRIB QUERYTARGET=' + self.ATTRIB_QUERYTARGET + '\n', 	
-		'ATTRIB SESSION=' + self.ATTRIB_SESSION + '\n', 		
-		'ATTRIB LBTCHANNEL=' + self.ATTRIB_LBTCHANNEL + '\n', 	
-		'ATTRIB SCHEDULEOPT=' + self.ATTRIB_SCHEDULEOPT + '\n', 	
-		'ATTRIB FIELDSEP="' + self.ATTRIB_FIELDSEP + '"\n', 	
-		'ATTRIB BROADCASTSYNC=' + self.ATTRIB_BROADCASTSYNC + '\n', 
-		'ATTRIB UTCTIME=' + self.ATTRIB_UTCTIME + '\n', 	
-		'ATTRIB TIMEOUTMODE=' + self.ATTRIB_TIMEOUTMODE + '\n', 
-		'ATTRIB NOTAGRPT=' + self.ATTRIB_NOTAGRPT + '\n', 	
-		'ATTRIB IDREPORT=' + self.ATTRIB_IDREPORT+ '\n', 	
-		'ATTRIB SCHEDOPT=' + self.ATTRIB_SCHEDOPT + '\n'] 		
+		'VER\r\n',
+		'PING TIME\r\n',
+		'ATTRIB ANTS=' + self.ATTRIB_ANTS + '\r\n', 			
+		'ATTRIB TAGTYPE=' + self.ATTRIB_TAGTYPE + '\r\n', 
+		'ATTRIB FIELDSTRENGTH=' + self.ATTRIB_FIELDSTRENGTH + '\r\n', 
+		'ATTRIB RDTRIES=' + self.ATTRIB_RDTRIES + '\r\n', 		
+		'ATTRIB RPTTIMEOUT=' + self.ATTRIB_RPTTIMEOUT + '\r\n', 	
+		'ATTRIB IDTIMEOUT=' + self.ATTRIB_IDTIMEOUT + '\r\n', 	
+		'ATTRIB ANTTIMEOUT=' + self.ATTRIB_ANTTIMEOUT + '\r\n', 	
+		'ATTRIB IDTRIES=' + self.ATTRIB_IDTRIES + '\r\n', 		
+		'ATTRIB ANTTRIES=' + self.ATTRIB_ANTTRIES + '\r\n', 		
+		'ATTRIB WRTRIES=' + self.ATTRIB_WRTRIES + '\r\n', 		
+		'ATTRIB LOCKTRIES='+ self.ATTRIB_LOCKTRIES + '\r\n', 	
+		'ATTRIB SELTRIES=' + self.ATTRIB_SELTRIES + '\r\n', 		
+		'ATTRIB UNSELTRIES=' + self.ATTRIB_UNSELTRIES + '\r\n', 	
+		'ATTRIB INITTRIES=' + self.ATTRIB_INITTRIES + '\r\n', 	
+		'ATTRIB INITIALQ=' + self.ATTRIB_INITIALQ + '\r\n', 		
+		'ATTRIB QUERYSEL=' + self.ATTRIB_QUERYSEL + '\r\n', 		
+		'ATTRIB QUERYTARGET=' + self.ATTRIB_QUERYTARGET + '\r\n', 	
+		'ATTRIB SESSION=' + self.ATTRIB_SESSION + '\r\n', 		
+		'ATTRIB LBTCHANNEL=' + self.ATTRIB_LBTCHANNEL + '\r\n', 	
+		'ATTRIB SCHEDULEOPT=' + self.ATTRIB_SCHEDULEOPT + '\r\n', 	
+		'ATTRIB FIELDSEP="' + self.ATTRIB_FIELDSEP + '"\r\n', 	
+		'ATTRIB BROADCASTSYNC=' + self.ATTRIB_BROADCASTSYNC + '\r\n', 
+		'ATTRIB UTCTIME=' + self.ATTRIB_UTCTIME + '\r\n', 	
+		'ATTRIB TIMEOUTMODE=' + self.ATTRIB_TIMEOUTMODE + '\r\n', 
+		'ATTRIB NOTAGRPT=' + self.ATTRIB_NOTAGRPT + '\r\n', 	
+		'ATTRIB IDREPORT=' + self.ATTRIB_IDREPORT+ '\r\n', 	
+		'ATTRIB SCHEDOPT=' + self.ATTRIB_SCHEDOPT + '\r\n'] 		
 		
 		# update of the number of Commands
 		self.numCommands=[len(self.commandList), 0]
@@ -780,42 +1048,56 @@ class Gui():
 
 	"""sends a read tag instruction to the RFID reader"""	
 	def btnReadTestCommand_click(self):
-		command= 'Read\n'
-		self.textLog.insert(tk.END, "sending command: " + command )			
+		command= 'Read RSSI ANT\r\n'
+		self.testLog.insert(tk.END, "sending command: " + command )			
 		response = self.sendSingleBriCommand(command)
+		#self.testLog.insert(tk.END, 'Response:\n'+ repr(response) + '\n')			
 		newResponse=response.replace('\r','')
-		self.textLog.insert(tk.END, newResponse)				
-		self.textLog.yview(tk.END)  #to keep the last text always visible
+		self.testLog.insert(tk.END, newResponse)
+		if newResponse.count('NOTAG') == 1:
+			numberTags = 0
+		else:
+			numberTags=newResponse.count('\n') -1 #to remove the ok line
+		self.testLog.insert(tk.END, "number of tags: " + str(numberTags) + "\n")				
+		self.testLog.yview(tk.END)  #to keep the last text always visible
 
 
 	"""sends a write tag instructino to the RFID reader"""	
 	def btnWriteTestCommand_click(self):
 
-		command= 'W EPCID =' + self.eTagData.get()+'\n'
-		self.textLog.insert(tk.END, "sending command: " + command )			
+		command= 'W EPCID =' + self.eTagData.get()+'\r\n'
+		self.testLog.insert(tk.END, "sending command: " + command )			
 		response = self.sendSingleBriCommand(command)
 		
 		newResponse=response.replace('\r','')
-		self.textLog.insert(tk.END, newResponse)				
-		self.textLog.yview(tk.END)  #to keep the last text always visible
+		self.testLog.insert(tk.END, newResponse)				
+		self.testLog.yview(tk.END)  #to keep the last text always visible
+
+	
+	"""sends a read tag instruction to the RFID reader"""	
+	def btnResetTestCommand_click(self):
+		command= 'Reset\r\n'
+		self.testLog.insert(tk.END, "sending command: " + command )			
+		response = self.sendSingleBriCommand(command)
+		self.testLog.insert(tk.END, 'Response:\n'+ repr(response) + '\n')			
+		newResponse=response.replace('\r','')
+		self.testLog.insert(tk.END, newResponse)				
+		self.testLog.yview(tk.END)  #to keep the last text always visible
 
 	
 	"""read all tags trough the Reader and instroduces the info in the database"""		
 	def btnStoreInDb_click(self):
 
-		command= 'Read\n'
-		self.textLog.insert(tk.END, "sending command: " + command )			
+		command= 'Read\r\n'
+		self.testLog.insert(tk.END, "sending command: " + command )			
 		response = self.sendSingleBriCommand(command)
 		
-		self.textLog.insert(tk.END, 'Response received:\n'+ repr(response) + '\n')				
+		self.testLog.insert(tk.END, 'Response received:\n'+ repr(response) + '\n')				
 		
 		response=response[:-5]   #Here we eliminate ending 5(O) 4(K) 3(>) 2(\r) 1(\n)	)
 				
 		listResponses=response.split('\r\n') 	# this leaves an empty element in the list
-		
-		#self.textLog.insert(tk.END, 'Response received:\n'+ repr(listResponses) + '\n')			
-		#listResponses.remove('')				# the empty element is removed
-		
+			
 		listPoints=[]
 		
 		#for the number of responses in the list, do...
@@ -833,42 +1115,68 @@ class Gui():
 				p.longitude=self.myLastGpsPoint.Longitude
 				p.altitude=self.myLastGpsPoint.Altitude
 				p.time=self.myLastGpsPoint.Time
-				self.textLog.insert(tk.END, 'time ' + p.time + ' . \n')
 				p.speed=self.myLastGpsPoint.Speed
+				p.truckId=self.TRUCK_ID
+				p.comments=self.COMMENTS
 				
+				self.testLog.insert(tk.END, 'time ' + p.time + ' . \n')	
+																						
 				#we add it to the list	of points
 				listPoints.append(p)				
-				self.textLog.insert(tk.END, 'point generated\n')
+				self.testLog.insert(tk.END, 'point generated\n')
 			else:
-				self.textLog.insert(tk.END, 'no tag has beed detected or stored.\n')
+				self.testLog.insert(tk.END, 'no tag has beed detected or stored.\n')
 		
 		# For the number of points in the list, do:
 		for i in range(len(listPoints)):
 			p=listPoints.pop()
 						
 			self.storePointInDb(p)			
-			self.textLog.insert(tk.END, 'point ' + p.EPCData + ' stored. \n')
+			self.testLog.insert(tk.END, 'point ' + p.EPCData + ' stored. \n')
 
-		self.textLog.yview(tk.END)
+		self.testLog.yview(tk.END)
 
 
-	"""checks last received gps point and shows it in the textLog"""
+	"""connect to SLOPE and tell result"""	
+	def btnTestGprs_click(self):
+		#url='http://www.google.com'
+		url='https://slopefis.mhgsystems.com/slope-fis/rest/customers/'
+		headers ={'Accept':'application/json'}		
+
+		self.testLog.insert(tk.END, "Connecting to " + url + "\n")	
+			
+		try:
+			r=requests.get(url, headers=headers, auth=('test','test'), verify=False)
+		
+			self.testLog.insert(tk.END, "Received: " +r.text + "\n")
+			self.testLog.insert(tk.END, "Status Code: " +str(r.status_code) + "\n")		
+		
+			if r.status_code ==200:	 
+				self.testLog.insert(tk.END, "GPRS works correctly\n")						
+			else:
+				self.testLog.insert(tk.END, "GPRS does not work correctly\n")	
+
+		except:
+			self.testLog.insert(tk.END, "exception happened when acceding. \n")
+	
+
+
+	"""checks last received gps point and shows it in the testLog"""
 	def btnReadGpsData_click(self):
 
-		self.textLog.insert(tk.END, 'Last Measured point: Time ' + str(self.myLastGpsPoint.Time) + '\n')
-		self.textLog.insert(tk.END, 'Last Measured point: Altitude ' + str(self.myLastGpsPoint.Altitude) + '\n')
-		self.textLog.yview(tk.END)  #to keep the last text always visible
+		self.testLog.insert(tk.END, 'Last Measured point: Time ' + str(self.myLastGpsPoint.Time) + '\n')
+		self.testLog.insert(tk.END, 'Last Measured point: Altitude ' + str(self.myLastGpsPoint.Altitude) + '\n')
+		self.testLog.yview(tk.END)  #to keep the last text always visible
 		
 	"""connects to the database and executes query to introduce points"""
 	def storePointInDb(self, p):
 
-		
 		# first we try to connect
 		try:
 			conn=psycopg2.connect("dbname='slope_db' user='postgres' host='localhost' password='p@ssw0rd'")
-			#self.textLog.insert(tk.END, 'database connected!!\n')
+			#self.testLog.insert(tk.END, 'database connected!!\n')
 		except:
-			self.textLog.insert(tk.END, 'Exception: unable to connect to the database\n') 
+			self.testLog.insert(tk.END, 'Exception: unable to connect to the database\n') 
 			conn.close()
 	
 		#then we create a cursor to connect
@@ -877,7 +1185,7 @@ class Gui():
 		#now we execute a query
 		query="INSERT INTO itruck (truck_id, time_created, longitude, latitude, altitude, speed, epc_data, is_sent, comments) VALUES (" + str(p.truckId) + ", '" + str(p.time)+ "', " + str(p.longitude) + ", " + str(p.latitude) + ", " + str(p.altitude) + ", " + str(p.speed) + ", '" + p.EPCData + "', " + str(p.isSent) + ", '" + p.comments + "')"
 		
-		#self.textLog.insert(tk.END, query)
+		#self.testLog.insert(tk.END, query)
 		
 		cur.execute(query)
 
@@ -894,11 +1202,11 @@ class Gui():
 	
 		
 		if (self.numCommands[0] > 0) and (self.numCommands[0] > self.numCommands[1]):
-			self.textLog.insert(tk.END, self.commandList[self.numCommands[1]])
+			self.testLog.insert(tk.END, self.commandList[self.numCommands[1]])
 			response = self.sendSingleBriCommand(self.commandList[self.numCommands[1]])
 			newResponse=response.replace('\r','')
-			self.textLog.insert(tk.END, newResponse)
-			self.textLog.yview(tk.END)
+			self.testLog.insert(tk.END, newResponse)
+			self.testLog.yview(tk.END)
 			
 			self.numCommands[1] = self.numCommands[1]+1
 			
@@ -915,18 +1223,21 @@ class Gui():
 		 
 		try:
 			s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-			#self.textLog.insert(tk.END,'socket created\n')   
+			#self.testLog.insert(tk.END,'socket created\n')   
 			s.connect((self.TCP_IP_RFID_READER, self.TCP_PORT_RFID_READER))
-			#self.textLog.insert(tk.END,'socket connected\n')   		
+			#self.testLog.insert(tk.END,'socket connected\n')   		
 			s.send(command.encode('utf-8'))
-			#self.textLog.insert(tk.END,'message sent succesfuly\n')  
+			#self.testLog.insert(tk.END,'message sent succesfuly\n') 
+			#some time is needed to receive all information from the RFID reader and fill the buffer
+			time.sleep(0.5) 
 			responseAsByte=s.recv(self.BUFFER_SIZE_RFID_READER)
-			#self.textLog.insert(tk.END,'message received succesffuly\n') 
+			#self.testLog.insert(tk.END,'message received succesffuly\n') 
 			s.close()  
 			responseAsString=responseAsByte.decode('utf-8')
 		
 		except:
 			s.close()	
+			Worker2.notFound()
 			responseAsString= "exception when doing "+ command
 		
 		finally:
@@ -938,19 +1249,35 @@ class Gui():
 		
 		config=ET.Element("config")
 		
-		TcpReaderConfig=ET.SubElement(config, "TcpReaderConfig")	
+		MainConfig=ET.SubElement(config, "MainConfig")	
 		
-		ET_TCP_IP_RFID_READER=ET.SubElement(TcpReaderConfig, "TCP_IP_RFID_READER")	
+		ET_TCP_IP_RFID_READER=ET.SubElement(MainConfig, "TCP_IP_RFID_READER")	
 		ET_TCP_IP_RFID_READER.text=(self.e1.get())
 		self.TCP_IP_RFID_READER=(self.e1.get())
 	
-		ET_TCP_PORT_RFID_READER=ET.SubElement(TcpReaderConfig, "TCP_PORT_RFID_READER")	
+		ET_TCP_PORT_RFID_READER=ET.SubElement(MainConfig, "TCP_PORT_RFID_READER")	
 		ET_TCP_PORT_RFID_READER.text=(self.e2.get())
 		self.TCP_PORT_RFID_READER=int((self.e2.get()))
 				
-		ET_BUFFER_SIZE_RFID_READER=ET.SubElement(TcpReaderConfig, "BUFFER_SIZE_RFID_READER")	
+		ET_BUFFER_SIZE_RFID_READER=ET.SubElement(MainConfig, "BUFFER_SIZE_RFID_READER")	
 		ET_BUFFER_SIZE_RFID_READER.text=(self.e3.get())	
-		self.BUFFER_SIZE_RFID_READER=int((self.e3.get()))		
+		self.BUFFER_SIZE_RFID_READER=int((self.e3.get()))	
+		
+		FREQ_READ_RFID=ET.SubElement(MainConfig, "FREQ_READ_RFID")	
+		FREQ_READ_RFID.text=(self.e50.get())	
+		self.FREQ_READ_RFID=int((self.e50.get()))	
+			
+		FREQ_ACCESS_PLATF=ET.SubElement(MainConfig, "FREQ_ACCESS_PLATF")	
+		FREQ_ACCESS_PLATF.text=(self.e51.get())	
+		self.FREQ_ACCESS_PLATF=int((self.e51.get()))
+		
+		TRUCK_ID=ET.SubElement(MainConfig, "TRUCK_ID")	
+		TRUCK_ID.text=(self.e52.get())	
+		self.TRUCK_ID=int((self.e52.get()))	
+			
+		COMMENTS=ET.SubElement(MainConfig, "COMMENTS")	
+		COMMENTS.text=(self.e53.get())	
+		self.COMMENTS=(self.e53.get())		
 		
 		RfidReaderConfig=ET.SubElement(config, "RfidReaderConfig")	
 		
@@ -1065,8 +1392,11 @@ class Gui():
 		tree =ET.ElementTree(config)
 		tree.write("config.xml")
 		
-		self.textLog.insert(tk.END, "Xml file generated succcessfully\n")
-		self.textLog.yview(tk.END)  #to keep the last text always visible
+		self.mainLog.insert(tk.END, "Xml file generated succcessfully\n")
+		self.mainLog.yview(tk.END)  #to keep the last text always visible
+		
+		#then we update the Rfid worker values
+		Worker2.updateValues(self.myRfidQueue, self.isTruckOn, self.FREQ_READ_RFID, self.TCP_IP_RFID_READER, self.TCP_PORT_RFID_READER, self.BUFFER_SIZE_RFID_READER)
 
 
 	""" destroys the main application window"""			
@@ -1075,7 +1405,7 @@ class Gui():
 		self.root.destroy()
 
 
-	"""takes all the text existing in the textLog and saves it in a text File"""
+	"""takes all the text existing in the testLog and saves it in a text File"""
 	def saveLogButton_click(self):
 	
 	
@@ -1083,16 +1413,16 @@ class Gui():
 		currentTime=str(datetime.datetime.now().strftime('%X').replace(":", "-"))
 		fileName=currentDate + '_' + currentTime + '_Log.txt'
 		try:
-			#self.textLog.insert(tk.END, fileName + "\n")
+			#self.testLog.insert(tk.END, fileName + "\n")
 			f=open(fileName, 'w')
-			#self.textLog.insert(tk.END, "file object opened\n")
-			f.write(self.textLog.get (1.0, tk.END))
-			#self.textLog.insert(tk.END, "file written\n")
+			#self.testLog.insert(tk.END, "file object opened\n")
+			f.write(self.mainLog.get (1.0, tk.END))
+			#self.testLog.insert(tk.END, "file written\n")
 			f.close()
-			#self.textLog.insert(tk.END, "file object closed\n")
-			self.textLog.insert(tk.END, "Log File created: " + fileName + "\n")
+			#self.testLog.insert(tk.END, "file object closed\n")
+			self.mainLog.insert(tk.END, "Log File created: " + fileName + "\n")
 		except: 
-			self.textLog.insert(tk.END, "Exception when writting a file\n")	
+			self.mainLog.insert(tk.END, "Exception when writting a file\n")	
 
 
 	def cfgBtn1_click(self):
@@ -1294,7 +1624,7 @@ class gpsWorkerThread(threading.Thread):
 		"""Constructor and setting variables"""	
 	
 		self.isRunning = True
-		self.myQueue = receivedQueue
+		self.myGpsQueue = receivedQueue
 		self.myPoint= gpsPoint()
 		
 		threading.Thread.__init__(self)	#necessary or we will have an error
@@ -1304,8 +1634,8 @@ class gpsWorkerThread(threading.Thread):
 		"""
 		Main method
 		"""
-			
-		print('while starts'.encode('utf-8').decode('utf-8'))
+		
+		print('GPS worker is alive and kicking'.encode('utf-8').decode('utf-8'))	
 		# This creates a socket to connect to the GPS serial device
 		the_connection=gps3.GPSDSocket()
 		
@@ -1314,7 +1644,6 @@ class gpsWorkerThread(threading.Thread):
 					
 		# It is very imporant to stop the thread from time to time
 		# To allow execution of the main tkinter window		
-		
 		
 			
 		try:				
@@ -1330,7 +1659,7 @@ class gpsWorkerThread(threading.Thread):
 					self.myPoint.Altitude=the_fix.TPV['alt']
 					self.myPoint.Time=the_fix.TPV['time']
 									
-					self.myQueue.put(self.myPoint)
+					self.myGpsQueue.put(self.myPoint)
 					
 					if isinstance(the_fix.TPV['track'], str):  # 'track' frequently is missing and returns as 'n/a'
 						heading = the_fix.TPV['track']
@@ -1351,9 +1680,209 @@ class gpsWorkerThread(threading.Thread):
 						
 		
 	def stop(self):
-		print('stopping thread'.encode('utf-8').decode('utf-8'))
+		print('GPS worker has been erradicated'.encode('utf-8').decode('utf-8'))
 		self.isRunning = False
+	
+	
+		
+"""	class to create the RFID-measuring thread"""	
+class rfidWorkerThread(threading.Thread):
+	
+	def __init__(self, receivedQueue, isThereReader, isTruckOn, spanBetweenMeasurements, IP, PORT, BUFFER):	
+		"""Constructor and setting variables"""	
+	
+		self.isRunning = True
+		self.isTruckOn = isTruckOn #we receive command to read
+		self.myRfidQueue = receivedQueue #place to introduce the readed info
+		self.spanBetweenMeasurements = spanBetweenMeasurements
+	
+		self.isThereReader = isThereReader #we receive command to read
+		
+		self.TCP_IP=IP
+		self.TCP_PORT=PORT
+		self.BUFFER_SIZE=BUFFER	
+		
+		self.dateNow=datetime.datetime.now()
+		self.dateNext=datetime.datetime.now()
+		
+		threading.Thread.__init__(self)	#necessary or we will have an error
+		
+	
+	"""Main method"""
+	def run(self):
 			
+		print('RFID worker is alive and kicking'.encode('utf-8').decode('utf-8'))
+		
+		#this executes always until we change the state with the stop method
+		while self.isRunning:
+			
+			
+			#if there is no reader, we try to find one
+			if self.isThereReader is False:
+						
+				command='ping\r\n'
+				
+				#We do a ping to the reader at the expected IP			
+				try:
+					s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+					s.connect((self.TCP_IP, self.TCP_PORT)) 		
+					s.send(command.encode('utf-8'))
+					#some time is needed to receive all information from the RFID reader and fill the buffer
+					time.sleep(0.5) 
+					responseAsByte=s.recv(self.BUFFER_SIZE)
+					s.close()  
+					responseAsString=responseAsByte.decode('utf-8')
+				
+				except:
+					s.close()	
+					responseAsString= "exception when doing "+ command
+						
+				newResponse=responseAsString[0:2] #Here we remove all answered text except from where OK is placed
+					
+				if newResponse =="OK":	 #to change from byte to utf-8		
+					self.isThereReader = True
+				else:
+					self.isThereReader = False				
+			
+			
+			#only if we are in reading mode...
+			if self.isTruckOn is True and self.isThereReader is True:
+			
+				# We update the date
+				self.dateNow=datetime.datetime.now()
+			
+				# we only read the RFID reader if it is the right time
+				if (self.dateNow > self.dateNext):
+
+					command= 'Read\r\n'	
+					responseAsString=''
+				
+					try:
+						s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		 
+						s.connect((self.TCP_IP, self.TCP_PORT))
+				
+						s.send(command.encode('utf-8'))
+
+						#some time is needed to receive all information from the RFID reader and fill the buffer
+						time.sleep(0.6) 
+						
+						responseAsByte=s.recv(self.BUFFER_SIZE)
+
+						s.close()  
+						responseAsString=responseAsByte.decode('utf-8')
+			
+					except:
+						s.close()	
+						self.isThereReader=False
+						responseAsString= "exception when doing "+ command
+					
+					responseAsString=responseAsString[:-5]  # Here we eliminate ending 5(O) 4(K) 3(>) 2(\r) 1(\n)
+				
+					listResponses=responseAsString.split('\r\n') 	# This leaves an empty element in the list
+				
+					numberOfTags=0
+					#for the number of responses in the list, do...
+					for i in range(len(listResponses)):
+						
+						EPCData=listResponses.pop()			
+						
+						# We assign the rest of the point data
+						if EPCData != ('NOTAG') and EPCData != (''):
+							self.myRfidQueue.put(EPCData)
+							numberOfTags = numberOfTags+1
+							
+					#print((str(numberOfTags)+' has been introduced in the Queue').encode('utf-8').decode('utf-8'))					
+
+				
+					#update time for next measurement
+					self.dateNext = self.dateNow + datetime.timedelta(0, self.spanBetweenMeasurements)
+								
+			time.sleep(2)	
+			
+	"""To provide a way for the main method to finish"""
+	def stop(self):
+		print('RFID worker has died'.encode('utf-8').decode('utf-8'))
+		self.isRunning = False		
+		
+		
+	"""To provide a way for the main method to finish"""
+	def notFound(self):	
+		self.isThereReader = False
+		
+		
+		
+	"""To update the values when desired"""
+	def updateValues(self, receivedQueue, isTruckOn, spanBetweenMeasurements, IP, PORT, BUFFER):
+
+		self.isTruckOn = isTruckOn #we receive command to read
+		self.myRfidQueue = receivedQueue #place to introduce the readed info
+		self.TCP_IP=IP
+		self.TCP_PORT=PORT
+		self.BUFFER_SIZE=BUFFER	
+		
+		# If we had a change in the span value, we want to use the new value inmediately
+		if self.spanBetweenMeasurements is not spanBetweenMeasurements:
+			self.spanBetweenMeasurements = spanBetweenMeasurements
+			self.dateNow=datetime.datetime.now()
+			self.dateNext = self.dateNow + datetime.timedelta(0, self.spanBetweenMeasurements)
+
+	
+	
+"""	class to create the Gprs thread"""	
+class gprsWorkerThread(threading.Thread):
+	
+	
+	def __init__(self, isThereGprs):	
+		"""Constructor and setting variables"""	
+	
+		self.isRunning = True
+		self.isThereGprs = isThereGprs
+		
+		self.url='https://slopefis.mhgsystems.com/slope-fis/rest/customers/'
+		self.headers ={'Accept':'application/json'}
+		
+		threading.Thread.__init__(self)	#necessary or we will have an error
+		
+	
+	def run(self):
+		"""
+		Main method
+		"""
+		
+		print('GPRS worker is born into the world'.encode('utf-8').decode('utf-8'))	
+		
+		#this executes always until we change the state with the stop method
+		while self.isRunning:
+			
+			
+			#if there is no connection, we try to find one
+			if self.isThereGprs is False:									
+
+				#print('trying to access SLOPE portal'.encode('utf-8').decode('utf-8'))
+				
+				try:
+					r=requests.get(self.url, headers=self.headers, auth=('test','test'), verify=False)
+					if r.status_code ==200:	 
+						self.isThereGprs = True
+						print(str(r.status_code).encode('utf-8').decode('utf-8'))
+					
+					else:
+						self.isThereGprs = False	
+						print(str(r.status_code).encode('utf-8').decode('utf-8'))	
+
+				except:
+					#print('exception happened when acceding \n'.encode('utf-8').decode('utf-8'))
+					self.isThereGprs = False	
+
+			time.sleep(5)	
+			
+	"""To provide a way for the main method to finish"""
+	def stop(self):
+		print('GPRS worker has died'.encode('utf-8').decode('utf-8'))
+		self.isRunning = False		
+			
+	
 			
 	
 """		Main loop.
@@ -1369,20 +1898,26 @@ if __name__== '__main__':
 	#this fills the toplevel window
 	client = Gui(mainWindow)
 	
-	#now we create a Worker. They report to a queue in mainWindow
-	Worker1 =gpsWorkerThread (client.myQueue)
+	#now we create Worker. They report to a queue in mainWindow	
+	Worker1=gpsWorkerThread(client.myGpsQueue)
+	Worker1.start()
 	
-	thread1=gpsWorkerThread(client.myQueue)
-	thread1.start()
+	#now we create Worker. They report to a queue in mainWindow	
+	Worker2=rfidWorkerThread(client.myRfidQueue, client.isThereRfidReader, client.isTruckOn, client.FREQ_READ_RFID, client.TCP_IP_RFID_READER, client.TCP_PORT_RFID_READER, client.BUFFER_SIZE_RFID_READER)
+	Worker2.start()	
+	
+	Worker3=gprsWorkerThread(client.isThereGprs)
+	Worker3.start()
 	
 	# finally this launches the top level window. Execution line stops here	
 	mainWindow.mainloop() 
 	
 	print('main Window closed'.encode('utf-8').decode('utf-8'))
 	#once the mainWindow in closed, this is executed
-	thread1.stop()
-	
-	thread1.join()
-	
-
-	
+	Worker1.stop()
+	Worker2.stop()
+	Worker3.stop()
+		
+	Worker1.join()
+	Worker2.join()	
+	Worker3.join()
